@@ -93,6 +93,10 @@ interface Props {
   providers: Record<Kind, string[]>
   field_schemas: Record<string, FieldDef[]>
   capabilities: CapabilityCard[]
+  // Set when an agent's propose_connection card sent the user here
+  // (/settings/credentials?provider=<slug>&open=new).
+  prefill_provider?: string | null
+  auto_open_new?: boolean
 }
 
 const CAPABILITY_ICONS: Record<string, typeof KeyRound> = {
@@ -222,7 +226,7 @@ function lookupSchema(schemas: Record<string, FieldDef[]>, kind: Kind, provider:
   ]
 }
 
-export default function CredentialsPage({ credentials, kinds, providers, field_schemas, capabilities }: Props) {
+export default function CredentialsPage({ credentials, kinds, providers, field_schemas, capabilities, prefill_provider, auto_open_new }: Props) {
   const [addOpen, setAddOpen] = useState(false)
   const [editing, setEditing] = useState<Credential | null>(null)
   // When the user clicks "Add key" on a capability card OR follows a
@@ -234,9 +238,14 @@ export default function CredentialsPage({ credentials, kinds, providers, field_s
     setAddOpen(true)
   }
 
-  // Deep-link: /settings/credentials?add_kind=generic&add_provider=replicate&add_agent=agt_…
-  // opens the modal pre-filled. Strips the query on close so a refresh
-  // doesn't reopen it.
+  // Two deep-links open the modal pre-filled:
+  //   ?add_kind=generic&add_provider=replicate&add_agent=agt_…  — agent edit
+  //     Capabilities tab, which knows the exact (kind, provider) pair.
+  //   ?provider=<slug>&open=new  — an agent's propose_connection card, which
+  //     only knows the service slug; an API token is always a generic cred.
+  //     Arrives as the prefill_provider / auto_open_new props (see the
+  //     controller), not read off the URL.
+  // Either way the query is stripped so a refresh doesn't reopen the modal.
   useEffect(() => {
     if (typeof window === "undefined") return
     const url = new URL(window.location.href)
@@ -246,11 +255,16 @@ export default function CredentialsPage({ credentials, kinds, providers, field_s
     if (k && p) {
       setPrefill({ kind: k, provider: p, agentSlug: a })
       setAddOpen(true)
-      url.searchParams.delete("add_kind")
-      url.searchParams.delete("add_provider")
-      url.searchParams.delete("add_agent")
-      window.history.replaceState({}, "", url.toString())
+    } else if (auto_open_new && prefill_provider) {
+      setPrefill({ kind: "generic", provider: prefill_provider })
+      setAddOpen(true)
+    } else {
+      return
     }
+    for (const key of ["add_kind", "add_provider", "add_agent", "provider", "open"]) {
+      url.searchParams.delete(key)
+    }
+    window.history.replaceState({}, "", url.toString())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const grouped = useMemo(() => {

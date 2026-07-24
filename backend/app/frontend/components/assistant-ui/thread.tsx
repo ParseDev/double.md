@@ -511,16 +511,18 @@ const InlineConnectionProposal: FC = () => {
       if (isCredential) {
         // API-token credentials: open the credentials settings page in
         // a new tab pre-filtered to this provider. User pastes their
-        // token, comes back to chat, retries.
+        // token, comes back to chat, retries. If the service actually
+        // authenticates by OAuth, the server bounces this to the connect
+        // flow instead — a pasted token could never satisfy it.
         const url = `/settings/credentials?provider=${encodeURIComponent(proposal.service)}&open=new`;
         window.open(url, "_blank", "noopener,noreferrer");
         proposal.dismiss();
       } else {
-        // Send the user to the /integrations directory to connect this
-        // service there (3-mode connect modal). The agent picks up the new
-        // connection on their next message.
+        // Open this service's connect modal (3-mode: managed / BYO-OAuth /
+        // paste-token). The agent picks up the new connection on their next
+        // message.
         proposal.dismiss();
-        window.location.href = "/integrations";
+        window.location.href = `/integrations?connect=${encodeURIComponent(proposal.service)}`;
       }
     } catch (err) {
       setError(`Network error: ${(err as Error).message}`);
