@@ -46,11 +46,18 @@ export function buildConnectionsMcpServer(ctx: ConnectionsContext) {
     },
     async (args) => {
       const slug = args.service.toLowerCase();
-      const kind = args.kind || "oauth";
+      const officialLabel = getSupportedLabel(slug);
+      // If the catalog knows how to connect this service, always propose the
+      // connect flow — a service like Google Calendar authenticates by OAuth
+      // and no pasted token can stand in for it, so a credential card sends
+      // the user somewhere they can't finish. This matters because the
+      // rejection text below tells the model to retry as api_credential, so a
+      // momentarily-stale supported list is enough to strand a real
+      // integration in the credential flow for good.
+      const kind: "oauth" | "api_credential" = officialLabel ? "oauth" : (args.kind || "oauth");
 
       let label: string;
       if (kind === "oauth") {
-        const officialLabel = getSupportedLabel(slug);
         if (!officialLabel) {
           const list = getSupportedSlugs().join(", ");
           logger.warn(`Connection proposal rejected: unsupported OAuth service '${args.service}' (current: ${list})`);

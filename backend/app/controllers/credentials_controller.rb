@@ -3,6 +3,14 @@ class CredentialsController < ApplicationController
 
   # GET /settings/credentials — full settings page (Inertia).
   def index
+    # An agent's propose_connection card can land here asking for a provider
+    # that authenticates by OAuth (Google Calendar, HubSpot, …). No pasted
+    # token can satisfy those, so showing the credential form is a dead end —
+    # send the user to that app's connect flow instead.
+    if (oauth_slug = oauth_managed_slug(params[:provider]))
+      redirect_to integrations_path(connect: oauth_slug) and return
+    end
+
     # Preload grant counts in one query so the index doesn't N+1 across
     # credentials.
     grant_counts = AgentCredentialGrant
@@ -138,6 +146,30 @@ class CredentialsController < ApplicationController
   end
 
   private
+
+  # The catalog slug to bounce to /integrations for, or nil to stay here.
+  # Only OAuth-authenticated apps qualify: their access can't be represented
+  # as a pasted secret, so the credential form could never satisfy them.
+  # api_key apps (Stripe, Google Maps, …) legitimately live here.
+  def oauth_managed_slug(provider)
+    slug = provider.to_s.strip.downcase
+    return nil if slug.blank?
+
+    entry = IntegrationCatalog.find(slug)
+    return nil if entry.blank?
+    return nil unless entry[:auth_type].to_s.start_with?("oauth")
+
+    # Only bounce when the handshake can actually complete today. An app
+    # that isn't wired up in Nango is a dead end on both pages, and moving
+    # the dead end helps nobody — so leave those where they are. Nango
+    # unreachable returns [], which degrades to exactly today's behaviour.
+    key = entry[:provider_config_key]
+    key.present? && Nango::Client.configured_provider_keys.include?(key) ? slug : nil
+  rescue StandardError => e
+    # Never let a catalog lookup take down the settings page.
+    Rails.logger.warn "credentials#index: catalog lookup for #{provider.inspect} failed: #{e.message}"
+    nil
+  end
 
   def credential_params
     params.require(:credential).permit(:kind, :provider, :name, :value, :agent_id, meta: {}, fields: {})

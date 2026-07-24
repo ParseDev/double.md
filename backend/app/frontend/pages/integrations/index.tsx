@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Head, router } from "@inertiajs/react"
 import { Plug, Trash2, Check, Search } from "lucide-react"
 
@@ -163,6 +163,23 @@ export default function IntegrationsIndex({
     setTokenValue("")
     setTokenConnect(entry)
   }
+
+  // Deep-link: /integrations?connect=google-calendar opens that app's connect
+  // modal straight away. An agent's "Connect <service>" card links here, and
+  // dropping the user into an 800-app directory to hunt for the one they were
+  // just asked about loses most of them. If the slug isn't in the catalog we
+  // fall back to seeding the search box so the page is still on-topic.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const url = new URL(window.location.href)
+    const slug = url.searchParams.get("connect")
+    if (!slug) return
+    if (catalogBySlug.has(slug)) connect(slug)
+    else setQuery(slug.replace(/[-_]/g, " "))
+    url.searchParams.delete("connect")
+    window.history.replaceState({}, "", url.toString())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Submit the pasted token for a token-auth MCP (from the connect-guide modal).
   async function submitTokenConnect() {
