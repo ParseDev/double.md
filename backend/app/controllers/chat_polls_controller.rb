@@ -33,6 +33,15 @@ class ChatPollsController < ApplicationController
     render json: { content: nil }
   end
 
+  # GET /agents/:agent_id/chat/live_tools
+  # Tool steps of the in-flight run, in metadata.tool_history's shape. The
+  # chat page seeds these on load and refetches whenever the cable
+  # (re)connects, so steps that streamed while the socket was down still land.
+  def live_tools
+    agent = find_by_public_id!(current_tenant.agents, params[:agent_id])
+    render json: { tool_history: LiveToolBuffer.tool_history(agent.id) }
+  end
+
   private
 
   def parse_time(raw)

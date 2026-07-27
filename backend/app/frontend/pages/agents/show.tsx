@@ -25,7 +25,7 @@ import {
   ShieldCheck,
 } from "lucide-react"
 import { toast } from "sonner"
-import { Fragment, useState, useCallback, useRef, useEffect } from "react"
+import { Fragment, useState, useCallback, useRef, useEffect, type ComponentProps } from "react"
 import { Plus, Trash2, Pause, Play, X as XIcon, ChevronsUpDown, ChevronDown, Plug, History as HistoryIcon, GitPullRequest } from "lucide-react"
 
 function formatBytes(bytes: number): string {
@@ -187,6 +187,9 @@ interface Props {
   emails: EmailItem[]
   chat_messages: unknown[]
   agent_thinking?: { since: string; after: string } | null
+  // Tool steps of an in-flight run, mirrored server-side so a reload mid-run
+  // doesn't lose the steps that already streamed. Empty when nothing's running.
+  live_tool_steps?: ComponentProps<typeof AgentChat>["liveToolSteps"]
   tasks: Task[]
   channel_configs: ChannelConfig[]
   scheduled_tasks: ScheduledTask[]
@@ -640,7 +643,7 @@ function toNumOrNull(v: number | string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-export default function AgentShow({ agent, spend, conversations, emails, chat_messages, agent_thinking = null, tasks, scheduled_tasks, approvals_by_message, pending_action_approvals = [], pending_approvals_by_conversation = {}, webhooks = [], installed_skills = [], available_skills = [], knowledge_documents = [], agent_files = [], anthropic_account_connected, available_llm_providers = [], channel_configs = [], missing_integrations = [], rail }: Props) {
+export default function AgentShow({ agent, spend, conversations, emails, chat_messages, agent_thinking = null, live_tool_steps = [], tasks, scheduled_tasks, approvals_by_message, pending_action_approvals = [], pending_approvals_by_conversation = {}, webhooks = [], installed_skills = [], available_skills = [], knowledge_documents = [], agent_files = [], anthropic_account_connected, available_llm_providers = [], channel_configs = [], missing_integrations = [], rail }: Props) {
   // While a fresh agent's machine boots, poll so the page flips to
   // "running" (and chat unlocks) without a manual refresh.
   useEffect(() => {
@@ -964,6 +967,7 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
             currentUser={currentUser}
             initialMessages={chat_messages as any}
             agentThinking={agent_thinking}
+            liveToolSteps={live_tool_steps}
             approvalsByMessage={approvals_by_message}
             pendingActionApprovals={pending_action_approvals}
           />

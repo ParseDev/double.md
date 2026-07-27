@@ -212,6 +212,10 @@ Rails.application.routes.draw do
     end
 
     get "agents/tree", to: "agents#tree", as: :agents_tree
+    # Model picker data — featured groups + every model synced from models.dev.
+    # Fetched lazily when a picker opens rather than shipped on every page:
+    # it's the full catalog, not a handful of curated ids.
+    get "model_catalog", to: "model_catalog#show", as: :model_catalog
     # Deploy an agent-bundle/v1 folder (the open agent-manifest format) from a
     # GitHub URL or an uploaded .tar.gz — the server half of
     # `npx agentmanifest deploy`.
@@ -245,6 +249,7 @@ Rails.application.routes.draw do
       resources :agent_webhooks, only: [ :create, :update, :destroy ], path: "webhooks"
       get "chat/stream", to: "chat_streams#show"
       get "chat/poll", to: "chat_polls#show"
+      get "chat/live_tools", to: "chat_polls#live_tools"
       # Day-2 ops on the agent's Fly Machine — one-click restart / reload
       # config / redeploy / destroy + recreate, plus a live log tail.
       post "ops/restart",     to: "agents/ops#restart",     as: :agent_ops_restart

@@ -250,6 +250,11 @@ interface AgentChatProps {
   // reloads. `after` is the user message's created_at — used as the cursor
   // for /chat/poll.
   agentThinking?: { since: string; after: string } | null
+  // Tool steps already streamed by the in-flight run, mirrored server-side
+  // (LiveToolBuffer). Seeds the pending bubble so a reload mid-run shows the
+  // steps that happened before this page existed, not just the ones still
+  // to come. Same shape as metadata.tool_history.
+  liveToolSteps?: PersistedToolStep[]
 }
 
 // One tool invocation inside a single assistant turn — accumulated as the
@@ -374,6 +379,50 @@ function stripLabelEmoji(label: string): string {
   return label.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*/u, "")
 }
 
+// Persisted tool timeline, as the engine writes it to metadata.tool_history
+// and as LiveToolBuffer serves it for a run that's still going.
+type PersistedToolStep = {
+  id?: string
+  tool: string
+  label?: string
+  input?: unknown
+  result?: string
+  is_error?: boolean
+  started_at?: string
+  ended_at?: string
+  parent_tool_use_id?: string
+}
+
+// Convert persisted tool history into the same ToolStep shape the live cable
+// stream builds, so one render path handles finished turns and reloads
+// mid-run alike. `live` keeps a step without `ended_at` spinning instead of
+// stamping it done — a finished turn's dangling step is over either way, but
+// an in-flight one genuinely is still running.
+function toolStepsFromHistory(
+  raw: unknown,
+  fallbackTime: number,
+  opts?: { live?: boolean },
+): ToolStep[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const history = raw as PersistedToolStep[]
+  return history.map((h, i) => ({
+    id: h.id ?? `${h.tool}-${i}`,
+    tool: h.tool,
+    label: stripLabelEmoji(h.label || h.tool),
+    result: h.result,
+    isError: h.is_error === true,
+    startedAt: h.started_at ? new Date(h.started_at).getTime() : fallbackTime,
+    doneAt: h.ended_at
+      ? new Date(h.ended_at).getTime()
+      : opts?.live ? undefined : fallbackTime,
+    sources: !h.is_error && (h.tool === "WebSearch" || h.tool === "WebFetch")
+      ? extractSources(h.result, h.input)
+      : undefined,
+    diff: deriveDiff(h.tool, h.input),
+    parentId: h.parent_tool_use_id,
+  }))
+}
+
 // Inject media metadata + ActiveStorage attachments into a server-side
 // message's content so the markdown renderer produces the same chip / image
 // the live cable stream produces. Persisted tool_history (engine-side) is
@@ -418,27 +467,7 @@ function fromServerMessage(
     content += "\n\n" + markers
   }
   const created = m.created_at ? new Date(m.created_at).getTime() : Date.now()
-  // Engine writes metadata.tool_history; convert to the same shape the live
-  // stream uses so the same render path handles both.
-  const persistedHistory = Array.isArray((meta as Record<string, unknown>).tool_history)
-    ? ((meta as Record<string, unknown>).tool_history as Array<{ id?: string; tool: string; label: string; input?: unknown; result?: string; is_error?: boolean; started_at?: string; ended_at?: string; parent_tool_use_id?: string }>)
-    : []
-  const toolSteps: ToolStep[] | undefined = persistedHistory.length > 0
-    ? persistedHistory.map((h, i) => ({
-        id: h.id ?? `${h.tool}-${i}`,
-        tool: h.tool,
-        label: stripLabelEmoji(h.label || h.tool),
-        result: h.result,
-        isError: h.is_error === true,
-        startedAt: h.started_at ? new Date(h.started_at).getTime() : created,
-        doneAt: h.ended_at ? new Date(h.ended_at).getTime() : created,
-        sources: !h.is_error && (h.tool === "WebSearch" || h.tool === "WebFetch")
-          ? extractSources(h.result, h.input)
-          : undefined,
-        diff: deriveDiff(h.tool, h.input),
-        parentId: h.parent_tool_use_id,
-      }))
-    : undefined
+  const toolSteps = toolStepsFromHistory((meta as Record<string, unknown>).tool_history, created)
   // Engine writes metadata.thinking when extended thinking ran.
   const persistedThinking = (meta as Record<string, unknown>).thinking as { text?: string; duration_ms?: number } | undefined
   const thinking = persistedThinking?.text
@@ -491,7 +520,7 @@ const storeToThreadMessage = (m: StoreMessage): ThreadMessageLike => ({
     : undefined,
 })
 
-export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus = "running", currentUser = null, initialMessages = [], approvalsByMessage = {}, pendingActionApprovals = [], agentThinking = null }: AgentChatProps) {
+export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus = "running", currentUser = null, initialMessages = [], approvalsByMessage = {}, pendingActionApprovals = [], agentThinking = null, liveToolSteps = [] }: AgentChatProps) {
   // Source of truth for what the chat renders. Hydrated from the server's
   // chat_messages, then updated in-place by the cable subscription.
   // If the server says a run is in flight (agentThinking set), append an
@@ -509,6 +538,7 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
         createdAt: Date.now(),
         status: "running",
         sender: { name: agentName, email: agentEmail, kind: "agent" },
+        toolSteps: toolStepsFromHistory(liveToolSteps, Date.now(), { live: true }),
       })
     }
     return seeded
@@ -647,6 +677,50 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
     },
     [],
   )
+
+  // Fold server-mirrored tool steps (LiveToolBuffer) into the pending bubble.
+  // Runs whenever the cable connects: the socket can drop and reconnect
+  // mid-run, and anything that streamed while it was down only exists in the
+  // mirror. Merges by tool_use id — live events win on ordering, the mirror
+  // fills the gaps and closes steps whose result we missed.
+  const mergeLiveToolSteps = useCallback((incoming: ToolStep[]) => {
+    if (incoming.length === 0) return
+    setMessages((prev) => {
+      const last = prev[prev.length - 1]
+      // No pending bubble means the turn already finished — its persisted
+      // tool_history is authoritative, so leave it alone.
+      if (last?.role !== "assistant" || last.status !== "running") return prev
+      const current = last.toolSteps ?? []
+      const byId = new Map(current.map((s) => [s.id, s]))
+      let changed = false
+      const merged = current.slice()
+      for (const step of incoming) {
+        const existing = byId.get(step.id)
+        if (!existing) {
+          merged.push(step)
+          changed = true
+        } else if (!existing.doneAt && step.doneAt) {
+          merged[merged.indexOf(existing)] = { ...existing, ...step }
+          changed = true
+        }
+      }
+      if (!changed) return prev
+      merged.sort((a, b) => a.startedAt - b.startedAt)
+      return [...prev.slice(0, -1), { ...last, toolSteps: merged }]
+    })
+  }, [])
+
+  const fetchLiveToolSteps = useCallback(async () => {
+    try {
+      const res = await fetch(`/agents/${agentId}/chat/live_tools`, {
+        headers: { Accept: "application/json" },
+      })
+      if (!res.ok) return
+      const data = await res.json() as { tool_history?: unknown }
+      const steps = toolStepsFromHistory(data.tool_history, Date.now(), { live: true })
+      if (steps) mergeLiveToolSteps(steps)
+    } catch { /* network blip — the cable is the primary path anyway */ }
+  }, [agentId, mergeLiveToolSteps])
 
   // Append to (or update) the trailing assistant message in the store. Used
   // by every cable event that carries assistant content — text_delta streams,
@@ -799,11 +873,16 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
         }
         const persistedJobId = typeof data.metadata?.job_id === "string" ? data.metadata.job_id : undefined
         const senderFromCable = (data.sender as SenderInfo | undefined) ?? undefined
+        // The engine forwards the turn's complete tool_history here. Adopt it
+        // over the locally accumulated steps — after a reload-mid-run the
+        // local set can be missing whatever streamed before we subscribed.
+        const persistedSteps = toolStepsFromHistory(data.metadata?.tool_history, Date.now())
         upsertAssistantContent(() => body, {
           final: true,
           extra: {
             ...(persistedJobId ? { jobId: persistedJobId } : {}),
             ...(senderFromCable ? { sender: senderFromCable } : {}),
+            ...(persistedSteps ? { toolSteps: persistedSteps } : {}),
           },
         })
         setIsRunning(false)
@@ -927,6 +1006,7 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
       if (!mounted) return
       if (GATEWAY_URL) {
         ws = new WebSocket(GATEWAY_URL)
+        ws.onopen = () => { if (mounted) fetchLiveToolSteps() }
         ws.onmessage = (event) => {
           try { handleEvent(JSON.parse(event.data)) } catch {}
         }
@@ -941,6 +1021,9 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
             { channel: "AgentChatChannel", agent_id: agentId },
             {
               received: handleEvent,
+              // Anything the engine streamed before we were listening (page
+              // reload, socket drop) only exists in the server-side mirror.
+              connected: () => { if (mounted) fetchLiveToolSteps() },
             },
           )
         }).catch(() => {})
@@ -955,7 +1038,7 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
       consumer?.disconnect()
       clearTimeout(reconnectTimer)
     }
-  }, [agentId])
+  }, [agentId, fetchLiveToolSteps])
 
   // Polling fallback for the reload-mid-run case. Cable broadcast can land
   // before a freshly-mounted page subscribes, so we lean on /chat/poll as a
@@ -992,7 +1075,14 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
                   ? `\n\n![${med.filename}](${med.url})`
                   : `\n\n[Download ${med.filename}](${med.url})`
               }
-              upsertAssistantContent(() => body, { final: true })
+              // The saved message carries the turn's full tool_history —
+              // prefer it over whatever partial set the bubble accumulated,
+              // since the poll path runs precisely when the cable was lossy.
+              const persistedSteps = toolStepsFromHistory(data.metadata?.tool_history, Date.now())
+              upsertAssistantContent(() => body, {
+                final: true,
+                extra: persistedSteps ? { toolSteps: persistedSteps } : undefined,
+              })
             }
             setIsRunning(false)
             setRunStartedAt(null)

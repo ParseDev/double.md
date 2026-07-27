@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_07_10_224907) do
+ActiveRecord::Schema[8.1].define(version: 2026_07_24_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pg_trgm"
@@ -65,6 +65,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_10_224907) do
     t.index ["organization_id", "agent_id"], name: "index_agent_files_on_organization_id_and_agent_id"
     t.index ["organization_id", "scope"], name: "index_agent_files_on_organization_id_and_scope"
     t.index ["organization_id"], name: "index_agent_files_on_organization_id"
+  end
+
+  create_table "agent_persona_revisions", force: :cascade do |t|
+    t.text "after_text", null: false
+    t.bigint "agent_id", null: false
+    t.text "before_text"
+    t.datetime "created_at", null: false
+    t.string "field", null: false
+    t.string "note"
+    t.bigint "organization_id", null: false
+    t.string "proposed_pr_url"
+    t.datetime "updated_at", null: false
+    t.bigint "user_id"
+    t.index ["agent_id", "created_at"], name: "index_agent_persona_revisions_on_agent_id_and_created_at"
+    t.index ["agent_id"], name: "index_agent_persona_revisions_on_agent_id"
+    t.index ["organization_id"], name: "index_agent_persona_revisions_on_organization_id"
+    t.index ["user_id"], name: "index_agent_persona_revisions_on_user_id"
   end
 
   create_table "agent_skills", force: :cascade do |t|
@@ -187,23 +204,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_10_224907) do
     t.index ["token"], name: "index_agent_webhooks_on_token", unique: true
   end
 
-  create_table "agent_persona_revisions", force: :cascade do |t|
-    t.bigint "agent_id", null: false
-    t.text "after_text", null: false
-    t.text "before_text"
-    t.datetime "created_at", null: false
-    t.string "field", null: false
-    t.string "note"
-    t.bigint "organization_id", null: false
-    t.string "proposed_pr_url"
-    t.datetime "updated_at", null: false
-    t.bigint "user_id"
-    t.index ["agent_id", "created_at"], name: "index_agent_persona_revisions_on_agent_id_and_created_at"
-    t.index ["agent_id"], name: "index_agent_persona_revisions_on_agent_id"
-    t.index ["organization_id"], name: "index_agent_persona_revisions_on_organization_id"
-    t.index ["user_id"], name: "index_agent_persona_revisions_on_user_id"
-  end
-
   create_table "agents", force: :cascade do |t|
     t.string "approval_mode", default: "manual", null: false
     t.jsonb "capabilities", default: {}, null: false
@@ -228,14 +228,14 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_10_224907) do
     t.date "spend_notified_on"
     t.decimal "spend_notify_threshold_pct", precision: 4, scale: 2, default: "0.8", null: false
     t.string "status", default: "pending", null: false
-    t.datetime "updated_at", null: false
     t.string "template_slug"
     t.integer "template_version_number"
-    t.index ["template_slug"], name: "index_agents_on_template_slug"
+    t.datetime "updated_at", null: false
     t.index ["capabilities"], name: "index_agents_on_capabilities", using: :gin
     t.index ["manager_id"], name: "index_agents_on_manager_id"
     t.index ["organization_id", "slug"], name: "index_agents_on_organization_id_and_slug", unique: true
     t.index ["organization_id"], name: "index_agents_on_organization_id"
+    t.index ["template_slug"], name: "index_agents_on_template_slug"
   end
 
   create_table "ai_configs", force: :cascade do |t|
@@ -328,6 +328,36 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_10_224907) do
     t.index ["category"], name: "index_catalog_apps_on_category"
     t.index ["published"], name: "index_catalog_apps_on_published"
     t.index ["slug"], name: "index_catalog_apps_on_slug", unique: true
+  end
+
+  create_table "catalog_models", force: :cascade do |t|
+    t.boolean "attachment", default: false, null: false
+    t.integer "context_limit"
+    t.decimal "cost_cache_read", precision: 12, scale: 6
+    t.decimal "cost_cache_write", precision: 12, scale: 6
+    t.decimal "cost_input", precision: 12, scale: 6
+    t.decimal "cost_output", precision: 12, scale: 6
+    t.datetime "created_at", null: false
+    t.text "description"
+    t.string "family"
+    t.boolean "featured", default: false, null: false
+    t.jsonb "input_modalities", default: [], null: false
+    t.string "knowledge_cutoff"
+    t.string "model_id", null: false
+    t.string "name", null: false
+    t.boolean "open_weights", default: false, null: false
+    t.integer "output_limit"
+    t.integer "position", default: 0, null: false
+    t.string "provider", null: false
+    t.boolean "published", default: true, null: false
+    t.boolean "reasoning", default: false, null: false
+    t.date "release_date"
+    t.datetime "synced_at"
+    t.boolean "tool_call", default: false, null: false
+    t.datetime "updated_at", null: false
+    t.index ["featured"], name: "index_catalog_models_on_featured"
+    t.index ["provider", "model_id"], name: "index_catalog_models_on_provider_and_model_id", unique: true
+    t.index ["release_date"], name: "index_catalog_models_on_release_date"
   end
 
   create_table "channel_configs", force: :cascade do |t|
@@ -790,11 +820,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_07_10_224907) do
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "agent_credential_grants", "agents"
   add_foreign_key "agent_credential_grants", "credentials"
+  add_foreign_key "agent_files", "agents"
+  add_foreign_key "agent_files", "organizations"
   add_foreign_key "agent_persona_revisions", "agents"
   add_foreign_key "agent_persona_revisions", "organizations"
   add_foreign_key "agent_persona_revisions", "users"
-  add_foreign_key "agent_files", "agents"
-  add_foreign_key "agent_files", "organizations"
   add_foreign_key "agent_skills", "agents"
   add_foreign_key "agent_skills", "skill_definitions"
   add_foreign_key "agent_summaries", "agents"

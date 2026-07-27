@@ -18,6 +18,16 @@ class Api::AgentEventsController < ActionController::API
 
     AgentChatChannel.broadcast_event(agent, event)
 
+    # Mirror the run's tool steps so a browser that reloads mid-run can
+    # replay what it wasn't subscribed for. Dropped once the turn ends —
+    # from then on the saved message's metadata.tool_history is the record.
+    case event["type"]
+    when "tool_call", "tool_result"
+      LiveToolBuffer.record(agent.id, event)
+    when "message", "done", "error"
+      LiveToolBuffer.clear(agent.id)
+    end
+
     # When the engine creates a PendingApproval (direct INSERT in the
     # postgres host), it broadcasts a 'pending_approval' event next.
     # Catch it here and post a Block Kit card to Slack — the AR

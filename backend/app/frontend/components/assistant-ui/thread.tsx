@@ -1021,17 +1021,12 @@ function faviconFor(url: string): string | null {
 }
 
 const AssistantMessage: FC = () => {
-  // Render a typing-dot pulse when the message is empty + still streaming —
-  // covers both fresh sends (placeholder pre-content) and reload-mid-run
-  // (recovery seed). AUI's MessagePrimitive.Parts renders nothing for an
-  // empty text part on its own.
-  const isEmptyAndRunning = useAuiState((s) => {
-    const status = s.message.status;
-    if (status?.type !== "running") return false;
-    const parts = s.message.content as Array<{ type: string; text?: string }> | undefined;
-    if (!parts || parts.length === 0) return true;
-    return parts.every((p) => p.type !== "text" || !(p.text ?? "").trim());
-  });
+  // The working indicator stays up for the whole run — not just while the
+  // bubble is empty. Once the first tool step or the first token landed we
+  // used to drop it, so a long tool-heavy turn looked finished and stalled.
+  // It sits below whatever's rendered so far: steps, partial prose, then the
+  // computer still chugging.
+  const isRunning = useAuiState((s) => s.message.status?.type === "running");
 
   // Read toolSteps directly so React's reference identity is stable. Returning
   // a fresh `[]` from the selector triggers AUI's Object.is change detection
@@ -1071,20 +1066,17 @@ const AssistantMessage: FC = () => {
         <SenderHeader align="left" />
         {thinking && <ThinkingPill text={thinking.text} durationMs={thinking.durationMs} />}
         {hasToolSteps && <ToolSteps steps={toolSteps!} />}
-        {isEmptyAndRunning && !hasToolSteps ? (
-          <ColdStartAwareDot />
-        ) : (
-          <CitationsProvider value={citations}>
-            <MessagePrimitive.Parts>
-              {({ part }) => {
-                if (part.type === "text") return <TextWithApprovals />;
-                if (part.type === "tool-call")
-                  return part.toolUI ?? <ToolFallback {...part} />;
-                return null;
-              }}
-            </MessagePrimitive.Parts>
-          </CitationsProvider>
-        )}
+        <CitationsProvider value={citations}>
+          <MessagePrimitive.Parts>
+            {({ part }) => {
+              if (part.type === "text") return <TextWithApprovals />;
+              if (part.type === "tool-call")
+                return part.toolUI ?? <ToolFallback {...part} />;
+              return null;
+            }}
+          </MessagePrimitive.Parts>
+        </CitationsProvider>
+        {isRunning && <ColdStartAwareDot />}
         <MessageError />
       </div>
 
@@ -1096,11 +1088,12 @@ const AssistantMessage: FC = () => {
   );
 };
 
-// Empty-pending assistant placeholder. ALWAYS the line-art computer
-// (ThinkingEyes) — one consistent "agent is working" indicator, never a bare
-// dot/spinner. During cold start (machine scaled to zero / pending / starting)
-// we keep the computer and add a "Waking <name> · ~30s" caption beside it so
-// the 30-ish second wait doesn't read as a stall.
+// The "agent is working" indicator, shown for as long as the turn is running
+// — alongside tool steps and streaming prose, not only before them. ALWAYS
+// the line-art computer (ThinkingEyes), never a bare dot/spinner. During cold
+// start (machine scaled to zero / pending / starting) we keep the computer and
+// add a "Waking <name> · ~30s" caption beside it so the 30-ish second wait
+// doesn't read as a stall.
 const ColdStartAwareDot: FC = () => {
   const status = useContext(AgentStatusContext);
   const name = useContext(AgentNameContext);
@@ -1117,16 +1110,18 @@ const ColdStartAwareDot: FC = () => {
   );
 };
 
-// "Agent is thinking" indicator — a tiny line-art computer whose eyes look
+// "Agent is thinking" indicator — a line-art computer whose eyes look
 // up and around toward the sender header (rendered right above this node),
 // with occasional blinks. Stroke uses currentColor so the tone follows the
-// surrounding muted text.
+// surrounding muted text. The viewBox is cropped to the artwork: the old
+// 160×120 box was mostly empty space, which shrank the computer to a smudge
+// at any font-sized height.
 const ThinkingEyes: FC = () => (
   <div className="flex items-center py-1" aria-label="Agent is thinking">
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 160 120"
-      className="h-6 w-auto text-muted-foreground/55"
+      viewBox="41 21 78 68"
+      className="h-7 w-auto text-muted-foreground/55"
       aria-hidden="true"
     >
       <style

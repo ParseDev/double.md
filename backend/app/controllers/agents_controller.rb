@@ -209,6 +209,11 @@ class AgentsController < ApplicationController
         },
       chat_messages: chat_messages,
       agent_thinking: agent_thinking,
+      # Tool steps of a run that's still in flight. The assistant message
+      # carries metadata.tool_history once the turn ends; until then this
+      # mirror is the only way a freshly-loaded page can show the steps that
+      # already streamed past. Same shape as metadata.tool_history.
+      live_tool_steps: agent_thinking ? LiveToolBuffer.tool_history(@agent.id) : [],
       approvals_by_message: approvals_by_message,
       pending_action_approvals: pending_action_approvals,
       # conversation_id → pending-approval count, so the inbox list can

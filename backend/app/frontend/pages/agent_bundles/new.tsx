@@ -18,7 +18,7 @@ import { LandingNav } from "@/components/landing/landing-nav"
 import { userSessionPath, userRegistrationPath } from "@/routes"
 import { MarkdownEditor } from "@/components/markdown-editor"
 import { slugify } from "@/lib/random-names"
-import { MODELS_BY_PROVIDER } from "@/lib/model-catalog"
+import { MODELS_BY_PROVIDER, useModelOptionsFor } from "@/lib/model-catalog"
 import { describeCron, CRON_PRESETS, timezoneOptions } from "@/lib/cron-describe"
 import { TimezoneSelect, isTimezoneInput } from "@/components/timezone-select"
 import { ConnectModal, type CatalogApp } from "@/components/integrations/connect-modal"
@@ -141,6 +141,8 @@ export default function DeployAgent({ source, upload, preview, error, connected_
   const [agentSlug, setAgentSlug] = useState(preview ? slugify(preview.name) : "")
   const [agentRole, setAgentRole] = useState(preview?.role || "")
   const [provider, setProvider] = useState(preview?.model?.provider || "anthropic")
+  // Live model list for the chosen provider (models.dev, synced daily).
+  const modelOptions = useModelOptionsFor(provider)
   const [modelId, setModelId] = useState(preview?.model?.id || preview?.model?.model_id || "claude-sonnet-4-6")
   const [mission, setMission] = useState(preview?.goal?.mission || "")
   const [definitionOfDone, setDefinitionOfDone] = useState(preview?.goal?.definition_of_done || "")
@@ -616,7 +618,7 @@ export default function DeployAgent({ source, upload, preview, error, connected_
                     <Select value={modelId} onValueChange={setModelId}>
                       <SelectTrigger className="w-full min-w-0 [&>span]:truncate"><SelectValue placeholder="Pick a model" /></SelectTrigger>
                       <SelectContent>
-                        {(MODELS_BY_PROVIDER[provider] || [{ value: modelId, label: modelId }]).map((m) => (
+                        {(modelOptions.length > 0 ? modelOptions : [{ value: modelId, label: modelId, hint: undefined }]).map((m) => (
                           <SelectItem key={m.value} value={m.value}>
                             <span className="font-medium">{m.label}</span>
                             {m.hint && <span className="text-muted-foreground"> — {m.hint}</span>}

@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { agentsPath } from "@/routes"
 import { randomAgentName, slugify } from "@/lib/random-names"
 import { TimezoneSelect, isTimezoneInput } from "@/components/timezone-select"
-import { MODELS_BY_PROVIDER } from "@/lib/model-catalog"
+import { MODELS_BY_PROVIDER, useModelOptionsFor } from "@/lib/model-catalog"
 
 // Deterministic agent creation. No AI anywhere in this flow: pick a
 // template (or Blank), every field pre-fills from the template row,
@@ -185,6 +185,10 @@ export default function AgentNew({ templates, agents, org_email_domain, connecte
     // substituted into persona + schedules server-side (Installer).
     inputs: {} as Record<string, string>,
   })
+
+  // Models for the picked provider, live from models.dev (falls back to the
+  // short static list until /model_catalog answers).
+  const modelOptions = useModelOptionsFor(data.ai_config.provider)
 
   // Slug derives from name on first render (useForm initializers can't
   // reference each other).
@@ -735,7 +739,7 @@ export default function AgentNew({ templates, agents, org_email_domain, connecte
                 >
                   <SelectTrigger className="w-full min-w-0 [&>span]:truncate"><SelectValue placeholder="Pick a model" /></SelectTrigger>
                   <SelectContent>
-                    {(MODELS_BY_PROVIDER[data.ai_config.provider] || []).map((m) => (
+                    {modelOptions.map((m) => (
                       <SelectItem key={m.value} value={m.value}>
                         <span className="font-medium">{m.label}</span>
                         {m.hint && <span className="text-muted-foreground"> — {m.hint}</span>}

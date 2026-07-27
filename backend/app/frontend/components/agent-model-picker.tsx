@@ -8,19 +8,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Brain, Check, Loader2 } from "lucide-react"
+import { Brain, Check, Loader2, Search } from "lucide-react"
 import { toast } from "sonner"
 import { router } from "@inertiajs/react"
+import { filterModels, useModelCatalog, type CatalogGroup, type CatalogOption } from "@/lib/model-catalog"
 
 // Providers whose models are unusable without a BYO key in /settings/credentials.
 // "anthropic" stays out of this gate: the platform ships an org-level fallback
 // ANTHROPIC_API_KEY so Claude-direct models work even without a user key.
 const KEY_REQUIRED_PROVIDERS = new Set(["openrouter"])
 
-// Curated model list — same shape as the picker on /agents/new. Grouped
-// by provider so users see at a glance what each model is. OpenRouter
-// entries include the high-signal "agentic" models (Kimi, MiniMax) up
-// top because they're the point of this surface.
+// Last-resort fallback list, used only when /model_catalog can't be reached
+// (and parsed server-side by ModelCatalog for the same reason). The live list
+// comes from catalog_models, synced daily from models.dev — add models there,
+// not here.
 const MODELS: Array<{
   group: string
   options: Array<{ provider: string; model_id: string; label: string; hint?: string }>
@@ -28,11 +29,11 @@ const MODELS: Array<{
   {
     group: "Anthropic (direct)",
     options: [
-      { provider: "anthropic", model_id: "claude-fable-5",            label: "Claude Fable 5",    hint: "newest flagship — strongest overall" },
-      { provider: "anthropic", model_id: "claude-opus-4-8",           label: "Claude Opus 4.8",   hint: "newest Opus — top reasoning" },
-      { provider: "anthropic", model_id: "claude-opus-4-7",           label: "Claude Opus 4.7",   hint: "previous Opus, still excellent" },
-      { provider: "anthropic", model_id: "claude-sonnet-4-6",         label: "Claude Sonnet 4.6", hint: "recommended default — fast + smart" },
-      { provider: "anthropic", model_id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5",  hint: "fastest + cheapest" },
+      { provider: "anthropic", model_id: "claude-opus-5",     label: "Claude Opus 5",     hint: "newest flagship — strongest overall" },
+      { provider: "anthropic", model_id: "claude-sonnet-5",   label: "Claude Sonnet 5",   hint: "recommended default — fast + smart" },
+      { provider: "anthropic", model_id: "claude-fable-5",    label: "Claude Fable 5",    hint: "long-form + creative" },
+      { provider: "anthropic", model_id: "claude-opus-4-8",   label: "Claude Opus 4.8",   hint: "previous Opus" },
+      { provider: "anthropic", model_id: "claude-haiku-4-5",  label: "Claude Haiku 4.5",  hint: "fastest + cheapest" },
     ],
   },
   // Subscription auth (anthropic_account / openai_account) — temporarily
@@ -42,27 +43,16 @@ const MODELS: Array<{
     // Non-Anthropic OR models resolve via ANTHROPIC_DEFAULT_*_MODEL env vars
     // (set by Rails agent_provisioner) — the engine doesn't pass the slug to
     // the SDK directly, so client-side validation is bypassed.
-    group: "OpenRouter — specialty",
+    group: "OpenRouter — recommended",
     options: [
-      { provider: "openrouter", model_id: "moonshotai/kimi-k2.6",       label: "Kimi K2.6 (Moonshot)", hint: "top agentic tool use" },
-      { provider: "openrouter", model_id: "minimax/minimax-m2.7",       label: "MiniMax M2.7",         hint: "long-context reasoning" },
-      { provider: "openrouter", model_id: "minimax/minimax-m2.5",       label: "MiniMax M2.5",         hint: "cheaper MiniMax" },
-      { provider: "openrouter", model_id: "deepseek/deepseek-v4-pro",   label: "DeepSeek V4 Pro",      hint: "strong reasoning" },
-      { provider: "openrouter", model_id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash",    hint: "cheap + fast" },
-      { provider: "openrouter", model_id: "qwen/qwen3-max-thinking",    label: "Qwen 3 Max (thinking)", hint: "open reasoning generalist" },
-      { provider: "openrouter", model_id: "z-ai/glm-5.2",               label: "GLM 5.2 (Z.ai)",        hint: "strong agentic coding" },
-    ],
-  },
-  {
-    group: "OpenRouter — frontier",
-    options: [
-      { provider: "openrouter", model_id: "anthropic/claude-opus-4-7",            label: "Claude Opus 4.7 (via OR)" },
-      { provider: "openrouter", model_id: "anthropic/claude-sonnet-4-6",          label: "Claude Sonnet 4.6 (via OR)" },
-      { provider: "openrouter", model_id: "openai/gpt-5.5-pro",                   label: "GPT-5.5 Pro",       hint: "OpenAI flagship" },
-      { provider: "openrouter", model_id: "openai/gpt-5.4-mini",                  label: "GPT-5.4 mini",      hint: "cheap OpenAI" },
-      { provider: "openrouter", model_id: "google/gemini-3.1-pro-preview",        label: "Gemini 3.1 Pro",    hint: "huge context" },
-      { provider: "openrouter", model_id: "google/gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash-Lite", hint: "cheap + fast Google" },
-      { provider: "openrouter", model_id: "x-ai/grok-4.20",                       label: "Grok 4.20",         hint: "xAI flagship" },
+      { provider: "openrouter", model_id: "openai/gpt-5.6-terra-pro", label: "GPT-5.6 Terra Pro", hint: "OpenAI flagship" },
+      { provider: "openrouter", model_id: "google/gemini-3.6-flash",  label: "Gemini 3.6 Flash",  hint: "fast + huge context" },
+      { provider: "openrouter", model_id: "moonshotai/kimi-k3",       label: "Kimi K3",           hint: "top agentic tool use" },
+      { provider: "openrouter", model_id: "x-ai/grok-4.5",            label: "Grok 4.5",          hint: "xAI flagship" },
+      { provider: "openrouter", model_id: "z-ai/glm-5.2",            label: "GLM 5.2 (Z.ai)",    hint: "strong agentic coding" },
+      { provider: "openrouter", model_id: "qwen/qwen3.7-plus",        label: "Qwen3.7 Plus",      hint: "open reasoning generalist" },
+      { provider: "openrouter", model_id: "minimax/minimax-m3",       label: "MiniMax M3",        hint: "long-context reasoning" },
+      { provider: "openrouter", model_id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro",   hint: "strong reasoning, cheap" },
     ],
   },
 ]
@@ -83,19 +73,31 @@ interface Props {
 
 export function AgentModelPicker({ agentId, currentProvider, currentModelId, anthropicAccountConnected, availableLlmProviders = [] }: Props) {
   const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  // Loads the first time the dropdown opens, then cached for the tab.
+  const { catalog, loading } = useModelCatalog(open)
 
   const subscriptionGroup = anthropicAccountConnected
     ? [{
         group: "Your Claude subscription",
-        options: [
-          { provider: "anthropic_account", model_id: "claude-fable-5",            label: "Claude Fable 5",    hint: "via your Pro/Max subscription" },
-          { provider: "anthropic_account", model_id: "claude-opus-4-8",           label: "Claude Opus 4.8",   hint: "via your Pro/Max subscription" },
-          { provider: "anthropic_account", model_id: "claude-sonnet-4-6",         label: "Claude Sonnet 4.6", hint: "via your Pro/Max subscription" },
-          { provider: "anthropic_account", model_id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5",  hint: "via your Pro/Max subscription" },
-        ],
+        options: MODELS[0].options.map((m) => ({
+          ...m,
+          provider: "anthropic_account",
+          hint: "via your Pro/Max subscription",
+        })),
       }]
     : []
-  const groupedModels = [...subscriptionGroup, ...MODELS]
+  // The server already drops / promotes the subscription group per org, so
+  // when the live catalog is in hand it's authoritative.
+  const groupedModels: CatalogGroup[] = catalog?.groups?.length
+    ? catalog.groups
+    : [...subscriptionGroup, ...MODELS]
+
+  const searching = query.trim().length > 0
+  const searchResults = searching
+    ? filterModels(catalog?.all ?? groupedModels.flatMap((g) => g.options), query).slice(0, 60)
+    : []
 
   const apply = async (provider: string, model_id: string) => {
     if (provider === currentProvider && model_id === currentModelId) return
@@ -119,7 +121,7 @@ export function AgentModelPicker({ agentId, currentProvider, currentModelId, ant
   }
 
   const currentLabel = (() => {
-    const known = groupedModels.flatMap((g) => g.options).find(
+    const known = [...(catalog?.all ?? []), ...groupedModels.flatMap((g) => g.options)].find(
       (m) => m.provider === currentProvider && m.model_id === currentModelId,
     )
     if (known) return known.label
@@ -133,8 +135,57 @@ export function AgentModelPicker({ agentId, currentProvider, currentModelId, ant
       .replace(/(^|\s|-)([a-z])/g, (_, sep, c) => sep + c.toUpperCase())
   })()
 
+  // One row, shared by the grouped view and the search results.
+  const renderOption = (m: CatalogOption) => {
+    const isCurrent = m.provider === currentProvider && m.model_id === currentModelId
+    const keyMissing = KEY_REQUIRED_PROVIDERS.has(m.provider) && !availableLlmProviders.includes(m.provider)
+    // Every model models.dev lists is selectable, but one that can't call
+    // tools can't drive an agent — say so instead of quietly shipping a brain
+    // that no-ops on the first tool call.
+    const noTools = m.tool_call === false
+    return (
+      <DropdownMenuItem
+        key={`${m.provider}-${m.model_id}`}
+        onSelect={() => {
+          if (keyMissing) {
+            router.visit("/settings/credentials")
+            return
+          }
+          apply(m.provider, m.model_id)
+        }}
+        className={`focus:bg-muted focus:text-foreground flex flex-col items-start gap-0.5 py-2 ${keyMissing ? "opacity-50" : ""}`}
+      >
+        <div className="flex w-full items-center gap-2">
+          {isCurrent ? (
+            <Check className="size-3.5 text-emerald-500" />
+          ) : (
+            <span className="size-3.5" />
+          )}
+          <span className="font-medium">{m.label}</span>
+          {searching && (
+            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{m.provider}</span>
+          )}
+        </div>
+        {keyMissing ? (
+          <span className="pl-5.5 text-xs text-muted-foreground italic">
+            Go to settings to set up your API key
+          </span>
+        ) : noTools ? (
+          <span className="pl-5.5 text-xs text-amber-600 dark:text-amber-500">
+            no tool use — can't run agent tools
+          </span>
+        ) : m.hint ? (
+          <span className="text-muted-foreground pl-5.5 text-xs">{m.hint}</span>
+        ) : null}
+        {searching && (
+          <span className="pl-5.5 font-mono text-[10px] text-muted-foreground/70">{m.model_id}</span>
+        )}
+      </DropdownMenuItem>
+    )
+  }
+
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery("") }}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
@@ -147,46 +198,46 @@ export function AgentModelPicker({ agentId, currentProvider, currentModelId, ant
           <span className="font-medium">{currentLabel}</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
-        {groupedModels.map((group, i) => (
-          <div key={group.group}>
-            {i > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel>{group.group}</DropdownMenuLabel>
-            {group.options.map((m) => {
-              const isCurrent = m.provider === currentProvider && m.model_id === currentModelId
-              const keyMissing = KEY_REQUIRED_PROVIDERS.has(m.provider) && !availableLlmProviders.includes(m.provider)
-              return (
-                <DropdownMenuItem
-                  key={`${m.provider}-${m.model_id}`}
-                  onSelect={() => {
-                    if (keyMissing) {
-                      router.visit("/settings/credentials")
-                      return
-                    }
-                    apply(m.provider, m.model_id)
-                  }}
-                  className={`focus:bg-muted focus:text-foreground flex flex-col items-start gap-0.5 py-2 ${keyMissing ? "opacity-50" : ""}`}
-                >
-                  <div className="flex w-full items-center gap-2">
-                    {isCurrent ? (
-                      <Check className="size-3.5 text-emerald-500" />
-                    ) : (
-                      <span className="size-3.5" />
-                    )}
-                    <span className="font-medium">{m.label}</span>
-                  </div>
-                  {keyMissing ? (
-                    <span className="pl-5.5 text-xs text-muted-foreground italic">
-                      Go to settings to set up your API key
-                    </span>
-                  ) : m.hint ? (
-                    <span className="text-muted-foreground pl-5.5 text-xs">{m.hint}</span>
-                  ) : null}
-                </DropdownMenuItem>
-              )
-            })}
+      <DropdownMenuContent align="end" className="max-h-[70vh] w-80 overflow-y-auto">
+        {/* Search spans the whole synced catalog (~300 models), not just the
+            recommended groups — that's the point of syncing models.dev. */}
+        <div className="sticky top-0 z-10 bg-popover px-2 pt-1 pb-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+              placeholder="Search all models…"
+              className="h-8 w-full rounded-md border bg-background pr-2 pl-7 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
           </div>
-        ))}
+        </div>
+
+        {searching ? (
+          searchResults.length > 0 ? (
+            searchResults.map(renderOption)
+          ) : (
+            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+              {loading ? "Loading catalog…" : `No model matches "${query.trim()}"`}
+            </div>
+          )
+        ) : (
+          groupedModels.map((group, i) => (
+            <div key={group.group}>
+              {i > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel>{group.group}</DropdownMenuLabel>
+              {group.options.map(renderOption)}
+            </div>
+          ))
+        )}
+
+        {!searching && catalog && (
+          <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
+            {catalog.all.length} models available — search to pick any of them
+          </div>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
