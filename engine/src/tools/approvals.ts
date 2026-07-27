@@ -15,6 +15,7 @@ import { host } from "../host/index.js";
 import { logger } from "../logger.js";
 import { createActionApproval } from "../security/action-approval.js";
 import { emitActionApproval } from "../gateway.js";
+import { isApprovingDecision, markEmailPreApproved } from "../email/pre-approval.js";
 import type { Origin } from "../channels/origin-delivery.js";
 
 const PAYLOAD_TYPES = [
@@ -98,6 +99,22 @@ function inferRiskTier(
     return "low";
   }
   return "medium";
+}
+
+// An approved email_draft / cold_email_bulk card IS the human's consent to
+// send. Bank it so the outbox processor doesn't turn around and demand a
+// second send_email approval for the same message — see email/pre-approval.ts.
+export function noteEmailApproval(
+  payloadType: string,
+  decisionValue: string,
+  reason: string,
+  payload?: Record<string, unknown>,
+): void {
+  if (payloadType !== "email_draft" && payloadType !== "cold_email_bulk") return;
+  if (!isApprovingDecision(decisionValue)) return;
+  // One "yes" on a bulk card covers every email in the batch.
+  const count = Array.isArray(payload?.items) ? (payload!.items as unknown[]).length : 1;
+  markEmailPreApproved(reason, count);
 }
 
 export function buildApprovalsMcpServer(ctx: ApprovalsContext) {
@@ -193,6 +210,9 @@ export function buildApprovalsMcpServer(ctx: ApprovalsContext) {
         // then resolve the promise locally without ever emitting the
         // approval card.
         if (standingRule) {
+          if (standingRule.auto_decision === "approve") {
+            noteEmailApproval(args.payload_type, "approve", `standing rule ${standingRule.label || standingRule.rule_id}`, args.payload);
+          }
           if (dbRow?.id) {
             await host.updatePendingApprovalDecision(dbRow.id, {
               status: standingRule.auto_decision === "approve" ? "approved" : "rejected",
@@ -236,6 +256,7 @@ export function buildApprovalsMcpServer(ctx: ApprovalsContext) {
             }],
           };
         }
+        noteEmailApproval(args.payload_type, decision.value, `request_approval "${args.summary}"`, args.payload);
         return {
           content: [{
             type: "text",

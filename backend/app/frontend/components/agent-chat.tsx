@@ -1,6 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react"
 import { router } from "@inertiajs/react"
-import { Check, X, Loader2, Mail } from "lucide-react"
 import {
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
@@ -12,7 +11,7 @@ import {
 } from "@assistant-ui/react"
 // @ts-expect-error — @rails/activestorage ships JS without types
 import { DirectUpload } from "@rails/activestorage"
-import { Thread, CmdApprovalProvider, ActionApprovalProvider, ConnectionProposalProvider, AgentStatusProvider, AgentNameProvider, RecoveryThinkingProvider } from "@/components/assistant-ui/thread"
+import { Thread, CmdApprovalProvider, ActionApprovalProvider, ConnectionProposalProvider, AgentStatusProvider, AgentNameProvider, RecoveryThinkingProvider, CurrentUserEmailProvider } from "@/components/assistant-ui/thread"
 import { MessageQueueProvider, useMessageQueue, type QueuedMessage } from "@/contexts/message-queue"
 import { FilePreviewProvider } from "@/contexts/file-preview"
 
@@ -1205,6 +1204,7 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
         }}>
           <CmdApprovalProvider value={cmdApproval}>
             <ActionApprovalProvider value={actionApproval}>
+             <CurrentUserEmailProvider value={currentUser?.email ?? null}>
               <ConnectionProposalProvider value={connectionProposal}>
                 <MessageQueueProvider agentId={agentId}>
                   <FilePreviewProvider>
@@ -1215,6 +1215,7 @@ export function AgentChat({ agentId, agentName, agentEmail = null, agentStatus =
                   </FilePreviewProvider>
                 </MessageQueueProvider>
               </ConnectionProposalProvider>
+             </CurrentUserEmailProvider>
             </ActionApprovalProvider>
           </CmdApprovalProvider>
         </RecoveryThinkingProvider>
@@ -1265,87 +1266,4 @@ export function parseMessageWithApprovals(text: string): { cleanText: string; ap
   }).trim()
 
   return { cleanText, approvals }
-}
-
-function InlineEmailApproval({ email, onDone }: { email: PendingEmail; onDone: () => void }) {
-  const [acting, setActing] = useState<"approving" | "rejecting" | null>(null)
-  const [result, setResult] = useState<"approved" | "rejected" | null>(null)
-
-  const csrfToken = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content || ""
-
-  async function handleAction(status: "approved" | "rejected") {
-    setActing(status === "approved" ? "approving" : "rejecting")
-    try {
-      await fetch(`/pending_approvals/${email.approvalId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
-        body: JSON.stringify({ status }),
-      })
-      setResult(status)
-      setTimeout(onDone, 2000)
-    } catch {
-      setActing(null)
-    }
-  }
-
-  if (result) {
-    return (
-      <div className={`rounded-lg border p-3 text-sm ${result === "approved" ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"}`}>
-        {result === "approved" ? "Email approved and sending..." : "Email rejected."}
-      </div>
-    )
-  }
-
-  return (
-    <div className="rounded-lg border bg-white shadow-lg p-4 space-y-3 animate-slide-up">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Mail className="size-3.5" />
-        Email draft — review before sending
-      </div>
-
-      <div className="space-y-1 text-xs">
-        <div className="flex gap-2">
-          <span className="font-medium w-10 shrink-0 text-muted-foreground">From</span>
-          <span>{email.from_name} &lt;{email.from_address}&gt;</span>
-        </div>
-        <div className="flex gap-2">
-          <span className="font-medium w-10 shrink-0 text-muted-foreground">To</span>
-          <span>{Array.isArray(email.to) ? email.to.join(", ") : email.to}</span>
-        </div>
-        {email.cc && email.cc.length > 0 && (
-          <div className="flex gap-2">
-            <span className="font-medium w-10 shrink-0 text-muted-foreground">CC</span>
-            <span>{email.cc.join(", ")}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="border-t pt-2">
-        <p className="font-medium text-sm">{email.subject}</p>
-      </div>
-
-      <div className="border-t pt-2 text-sm text-muted-foreground whitespace-pre-wrap max-h-32 overflow-y-auto leading-relaxed">
-        {email.body_text}
-      </div>
-
-      <div className="flex gap-2 pt-1 border-t">
-        <button
-          onClick={() => handleAction("approved")}
-          disabled={acting !== null}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[var(--color-ink)] text-white text-xs font-medium hover:bg-[var(--color-ink-soft)] transition-colors disabled:opacity-50"
-        >
-          {acting === "approving" ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
-          Approve & Send
-        </button>
-        <button
-          onClick={() => handleAction("rejected")}
-          disabled={acting !== null}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
-        >
-          {acting === "rejecting" ? <Loader2 className="size-3 animate-spin" /> : <X className="size-3" />}
-          Reject
-        </button>
-      </div>
-    </div>
-  )
 }

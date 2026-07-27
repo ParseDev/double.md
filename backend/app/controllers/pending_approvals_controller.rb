@@ -85,7 +85,14 @@ class PendingApprovalsController < ApplicationController
           instruction: "The user just decided on your earlier approval request " \
                        "(#{approval.try(:summary) || approval.payload_type}): #{approval.decision}" \
                        "#{approval.decision_text.present? ? " — #{approval.decision_text}" : ''}. " \
-                       "Continue that work accordingly; do not re-request approval."
+                       "Continue that work accordingly; do not re-request approval.",
+          # Structured echo of the decision. The engine replays it as an
+          # email pre-approval so an approved email_draft doesn't get stopped
+          # a SECOND time by the send_email draft policy — the user already
+          # said yes, and that second card is invisible on a resumed run.
+          approvalPayloadType: approval.payload_type,
+          approvalDecision: approval.decision,
+          approvalSummary: approval.try(:summary)
         }
       )
     end

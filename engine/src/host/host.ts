@@ -175,6 +175,10 @@ export interface Host {
     context?: string,
     messageId?: number,
   ): Promise<number>;
+  // Back-fills message_id on an approval raised by a run that had no
+  // conversation yet (scheduled / resumed jobs). Without it the approval
+  // card renders nowhere on reload.
+  attachApprovalToMessage(approvalId: number, messageId: number): Promise<void>;
   getLatestPendingApproval(agentId: number): Promise<PendingApproval | null>;
   getApprovalById(id: number): Promise<PendingApproval | null>;
   updateApprovalStatus(approvalId: number, status: "approved" | "rejected"): Promise<void>;

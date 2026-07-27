@@ -99,6 +99,11 @@ type ActionApprovalData = {
 const ActionApprovalContext = createContext<ActionApprovalData>(null);
 export const ActionApprovalProvider = ActionApprovalContext.Provider;
 
+// Logged-in user's address, so an email card can offer "Cc me" without the
+// user having to type it (or ask the agent to redraft just to add a Cc).
+const CurrentUserEmailContext = createContext<string | null>(null);
+export const CurrentUserEmailProvider = CurrentUserEmailContext.Provider;
+
 // Item 5 — propose_connection: agent asks the user to wire up external
 // access. ONE card type handles both kinds:
 //   connect → send the user to the /integrations directory to connect
@@ -311,6 +316,7 @@ const InlineCommandApproval: FC = () => {
 
 const InlineActionApproval: FC = () => {
   const approval = useContext(ActionApprovalContext);
+  const currentUserEmail = useContext(CurrentUserEmailContext);
   const [done, setDone] = useState<string | null>(null);
   const [amendOpen, setAmendOpen] = useState(false);
   const [amendText, setAmendText] = useState("");
@@ -340,6 +346,11 @@ const InlineActionApproval: FC = () => {
   const cleanPayload: Record<string, unknown> = { ...payload };
   delete cleanPayload._allow_amendment;
   delete cleanPayload._origin;
+
+  const isEmailPayload = approval.payloadType === "email_draft" || approval.payloadType === "cold_email_bulk";
+  const ccsCurrentUser = !!currentUserEmail && JSON.stringify(payload.cc ?? "")
+    .toLowerCase()
+    .includes(currentUserEmail.toLowerCase());
 
   return (
     <div className="mx-auto w-full max-w-(--thread-max-width) pb-2 animate-in slide-in-from-bottom-2 fade-in duration-200">
@@ -382,6 +393,17 @@ const InlineActionApproval: FC = () => {
               className="px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors"
             >
               ✎ Edit
+            </button>
+          )}
+          {/* One-click "approve, but copy me" — this card is the agent's own
+              draft (it re-sends engine-side from this payload), so the only
+              way to change a field is to hand the agent an amendment. */}
+          {isEmailPayload && currentUserEmail && !ccsCurrentUser && (
+            <button
+              onClick={() => handle("approve", `Also Cc ${currentUserEmail} on this email.`, `Cc ${currentUserEmail}`)}
+              className="px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors"
+            >
+              Approve + Cc me
             </button>
           )}
         </div>
@@ -432,9 +454,16 @@ function ActionPreview({ payloadType, payload }: { payloadType: string; payload:
     );
   }
   if (payloadType === "email_draft") {
+    // Cc/Bcc were invisible here, so a user who asked to be copied had no
+    // way to tell whether the agent actually did it.
+    const addrs = (v: unknown) => (Array.isArray(v) ? v.filter(Boolean).join(", ") : String(v || ""));
+    const cc = addrs(payload.cc);
+    const bcc = addrs(payload.bcc);
     return (
       <div className="space-y-1.5">
-        <div className="text-xs"><span className="text-muted-foreground">To: </span>{String(payload.to || "")}</div>
+        <div className="text-xs"><span className="text-muted-foreground">To: </span>{addrs(payload.to)}</div>
+        {cc && <div className="text-xs"><span className="text-muted-foreground">Cc: </span>{cc}</div>}
+        {bcc && <div className="text-xs"><span className="text-muted-foreground">Bcc: </span>{bcc}</div>}
         <div className="text-xs"><span className="text-muted-foreground">Subj: </span>{String(payload.subject || "")}</div>
         <div className="text-sm whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto border-t pt-2">
           {String(payload.body || "")}
@@ -1507,13 +1536,25 @@ const TextWithApprovals: FC = () => {
   );
 };
 
-function InlineEmailCard({ email }: { email: { approvalId: number; to: string; cc?: string[]; subject: string; body_text: string; from_address: string; from_name: string; status?: string } }) {
-  const [acting, setActing] = useState<"approving" | "rejecting" | null>(null);
+function InlineEmailCard({ email }: { email: { approvalId: number; to: string | string[]; cc?: string[]; bcc?: string[]; subject: string; body_text: string; from_address: string; from_name: string; status?: string } }) {
+  const currentUserEmail = useContext(CurrentUserEmailContext);
+  const [acting, setActing] = useState<"approving" | "rejecting" | "saving" | null>(null);
   const [result, setResult] = useState<"approved" | "rejected" | null>(
     email.status === "approved" ? "approved" : email.status === "rejected" ? "rejected" : null
   );
+  const [editing, setEditing] = useState(false);
+  // Local copy of the draft. The card is the only place the user sees this
+  // email before it goes out, so edits have to survive here until the PATCH
+  // lands — re-reading `email` would show the stale server copy.
+  const [draft, setDraft] = useState({
+    to: Array.isArray(email.to) ? email.to.join(", ") : String(email.to || ""),
+    cc: (email.cc || []).join(", "),
+    subject: email.subject || "",
+    body: email.body_text || "",
+  });
 
   const csrfToken = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content || "";
+  const splitAddrs = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
   async function handleAction(status: "approved" | "rejected") {
     setActing(status === "approved" ? "approving" : "rejecting");
@@ -1529,64 +1570,183 @@ function InlineEmailCard({ email }: { email: { approvalId: number; to: string; c
     }
   }
 
+  // send=false keeps the approval pending with the new content; send=true
+  // merges the edit server-side BEFORE approving, so what goes out is
+  // exactly what's on screen.
+  async function saveEdits(send: boolean) {
+    setActing(send ? "approving" : "saving");
+    try {
+      const body: Record<string, unknown> = {
+        tool_input_patch: {
+          to: splitAddrs(draft.to),
+          cc: splitAddrs(draft.cc),
+          subject: draft.subject,
+          body_text: draft.body,
+        },
+      };
+      if (send) body.status = "approved";
+      else body.save_only = "1";
+      const res = await fetch(`/pending_approvals/${email.approvalId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken, Accept: "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      setEditing(false);
+      if (send) setResult("approved");
+      setActing(null);
+    } catch {
+      setActing(null);
+    }
+  }
+
+  function ccMe() {
+    if (!currentUserEmail) return;
+    setDraft((d) => {
+      const list = splitAddrs(d.cc);
+      if (list.some((a) => a.toLowerCase() === currentUserEmail.toLowerCase())) return d;
+      return { ...d, cc: [...list, currentUserEmail].join(", ") };
+    });
+  }
+
+  const ccList = splitAddrs(draft.cc);
+
   return (
     <div className="my-3 rounded-lg border bg-card p-4 space-y-3">
       <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
         <MailIcon className="size-3.5" />
-        {result === "approved" ? "Email sent" : result === "rejected" ? "Email rejected" : "Email draft — review before sending"}
+        {result === "approved" ? "Email approved — sending" : result === "rejected" ? "Email rejected" : "Email draft — review before sending"}
       </div>
 
       {!result && (
         <>
-          <div className="space-y-1 text-xs">
-            <div className="flex gap-2">
-              <span className="font-medium w-10 shrink-0 text-muted-foreground">From</span>
-              <span>{email.from_name} &lt;{email.from_address}&gt;</span>
+          {editing ? (
+            <div className="space-y-1.5">
+              {([["To", "to"], ["Cc", "cc"], ["Subject", "subject"]] as const).map(([label, field]) => (
+                <div key={field} className="flex items-center gap-2">
+                  <span className="w-12 shrink-0 text-xs text-muted-foreground">{label}</span>
+                  <input
+                    value={draft[field]}
+                    onChange={(e) => setDraft((d) => ({ ...d, [field]: e.target.value }))}
+                    placeholder={field === "subject" ? "Subject" : "a@x.com, b@y.com"}
+                    className="h-7 w-full rounded-md border bg-background px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring/30"
+                  />
+                  {field === "cc" && currentUserEmail && (
+                    <button
+                      onClick={ccMe}
+                      className="h-7 shrink-0 rounded-md border px-2 text-xs font-medium hover:bg-muted transition-colors"
+                    >
+                      Cc me
+                    </button>
+                  )}
+                </div>
+              ))}
+              <textarea
+                value={draft.body}
+                onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+                className="w-full min-h-[180px] rounded-md border bg-background p-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring/30"
+              />
             </div>
-            <div className="flex gap-2">
-              <span className="font-medium w-10 shrink-0 text-muted-foreground">To</span>
-              <span>{Array.isArray(email.to) ? email.to.join(", ") : email.to}</span>
-            </div>
-            {email.cc && email.cc.length > 0 && (
-              <div className="flex gap-2">
-                <span className="font-medium w-10 shrink-0 text-muted-foreground">CC</span>
-                <span>{email.cc.join(", ")}</span>
+          ) : (
+            <>
+              <div className="space-y-1 text-xs">
+                <div className="flex gap-2">
+                  <span className="font-medium w-10 shrink-0 text-muted-foreground">From</span>
+                  <span>{email.from_name} &lt;{email.from_address}&gt;</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="font-medium w-10 shrink-0 text-muted-foreground">To</span>
+                  <span>{draft.to || "—"}</span>
+                </div>
+                {ccList.length > 0 && (
+                  <div className="flex gap-2">
+                    <span className="font-medium w-10 shrink-0 text-muted-foreground">Cc</span>
+                    <span>{ccList.join(", ")}</span>
+                  </div>
+                )}
               </div>
+
+              <div className="border-t pt-2">
+                <p className="font-medium text-sm">{draft.subject}</p>
+              </div>
+
+              <div className="border-t pt-2 text-sm text-muted-foreground whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">
+                {draft.body}
+              </div>
+            </>
+          )}
+
+          <div className="flex flex-wrap gap-2 pt-1 border-t">
+            {editing ? (
+              <>
+                <button
+                  onClick={() => saveEdits(true)}
+                  disabled={acting !== null}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {acting === "approving" ? <Loader2Icon className="size-3 animate-spin" /> : <CheckIcon className="size-3" />}
+                  Save &amp; send
+                </button>
+                <button
+                  onClick={() => saveEdits(false)}
+                  disabled={acting !== null}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  {acting === "saving" ? <Loader2Icon className="size-3 animate-spin" /> : null}
+                  Save
+                </button>
+                <button
+                  onClick={() => setEditing(false)}
+                  disabled={acting !== null}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => handleAction("approved")}
+                  disabled={acting !== null}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {acting === "approving" ? <Loader2Icon className="size-3 animate-spin" /> : <CheckIcon className="size-3" />}
+                  Approve &amp; Send
+                </button>
+                <button
+                  onClick={() => setEditing(true)}
+                  disabled={acting !== null}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  <PencilIcon className="size-3" />
+                  Edit
+                </button>
+                {currentUserEmail && !ccList.some((a) => a.toLowerCase() === currentUserEmail.toLowerCase()) && (
+                  <button
+                    onClick={() => { ccMe(); setEditing(true) }}
+                    disabled={acting !== null}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    Cc me
+                  </button>
+                )}
+                <button
+                  onClick={() => handleAction("rejected")}
+                  disabled={acting !== null}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  {acting === "rejecting" ? <Loader2Icon className="size-3 animate-spin" /> : <XIcon className="size-3" />}
+                  Reject
+                </button>
+              </>
             )}
-          </div>
-
-          <div className="border-t pt-2">
-            <p className="font-medium text-sm">{email.subject}</p>
-          </div>
-
-          <div className="border-t pt-2 text-sm text-muted-foreground whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">
-            {email.body_text}
-          </div>
-
-          <div className="flex gap-2 pt-1 border-t">
-            <button
-              onClick={() => handleAction("approved")}
-              disabled={acting !== null}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {acting === "approving" ? <Loader2Icon className="size-3 animate-spin" /> : <CheckIcon className="size-3" />}
-              Approve & Send
-            </button>
-            <button
-              onClick={() => handleAction("rejected")}
-              disabled={acting !== null}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
-            >
-              {acting === "rejecting" ? <Loader2Icon className="size-3 animate-spin" /> : <XIcon className="size-3" />}
-              Reject
-            </button>
           </div>
         </>
       )}
 
       {result === "approved" && (
         <p className="text-xs text-green-700 flex items-center gap-1.5">
-          <CheckIcon className="size-3" /> Email approved and sending
+          <CheckIcon className="size-3" /> Sending now — it&apos;ll show up under Inbox → Sent.
         </p>
       )}
       {result === "rejected" && (

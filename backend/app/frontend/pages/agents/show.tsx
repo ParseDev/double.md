@@ -158,6 +158,25 @@ interface EmailItem {
   contact: string | null
 }
 
+// One row of the "Sent" tab — every email the agent tried to send, whether
+// it left, is still waiting on a human, or was rejected by SES.
+interface SentEmailItem {
+  id: string
+  state: "sent" | "awaiting_approval" | "failed"
+  approval_id?: number
+  conversation_id?: number | null
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  subject: string | null
+  preview: string | null
+  body_text: string | null
+  error?: string | null
+  email_not_configured?: boolean
+  sent_by_user?: boolean
+  created_at: string
+}
+
 interface SkillItem {
   id: number
   slug: string
@@ -185,6 +204,7 @@ interface Props {
   spend?: { today: SpendSummary; seven_day: SpendSummary; thirty_day: SpendSummary }
   conversations: ConversationItem[]
   emails: EmailItem[]
+  sent_emails?: SentEmailItem[]
   chat_messages: unknown[]
   agent_thinking?: { since: string; after: string } | null
   // Tool steps of an in-flight run, mirrored server-side so a reload mid-run
@@ -643,7 +663,7 @@ function toNumOrNull(v: number | string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-export default function AgentShow({ agent, spend, conversations, emails, chat_messages, agent_thinking = null, live_tool_steps = [], tasks, scheduled_tasks, approvals_by_message, pending_action_approvals = [], pending_approvals_by_conversation = {}, webhooks = [], installed_skills = [], available_skills = [], knowledge_documents = [], agent_files = [], anthropic_account_connected, available_llm_providers = [], channel_configs = [], missing_integrations = [], rail }: Props) {
+export default function AgentShow({ agent, spend, conversations, emails, sent_emails = [], chat_messages, agent_thinking = null, live_tool_steps = [], tasks, scheduled_tasks, approvals_by_message, pending_action_approvals = [], pending_approvals_by_conversation = {}, webhooks = [], installed_skills = [], available_skills = [], knowledge_documents = [], agent_files = [], anthropic_account_connected, available_llm_providers = [], channel_configs = [], missing_integrations = [], rail }: Props) {
   // While a fresh agent's machine boots, poll so the page flips to
   // "running" (and chat unlocks) without a manual refresh.
   useEffect(() => {
@@ -719,7 +739,10 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
     window.addEventListener("popstate", onPop)
     return () => window.removeEventListener("popstate", onPop)
   }, [])
+  // "sent" is a pseudo-channel: it swaps the thread list for the outbound
+  // feed (sent / waiting on approval / failed) instead of filtering it.
   const [channelFilter, setChannelFilter] = useState<string>("all")
+  const [selectedSentId, setSelectedSentId] = useState<string | null>(null)
   const [convMessages, setConvMessages] = useState<MessageItem[]>([])
   const [convApprovals, setConvApprovals] = useState<InboxApproval[]>([])
   // Live copy of the server's conv_id → pending-approval count, so badge
@@ -820,7 +843,7 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
           setPendingByConv((prev) => ({ ...prev, [convId]: Math.max(0, (prev[convId] || 1) - 1) }))
           setTimeout(() => refreshConversation(convId), 2000)
         }
-        router.reload({ only: ["rail", "pending_approvals_by_conversation"] })
+        router.reload({ only: ["rail", "pending_approvals_by_conversation", "sent_emails"] })
       }
       toast.success(send ? "Saved & sending" : "Draft saved")
       setApprovalBusy(null)
@@ -851,7 +874,7 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
         if (status === "approved") setTimeout(() => refreshConversation(convId), 2000)
       }
       // Re-sync the rail count + the dual-keyed badge map from the server.
-      router.reload({ only: ["rail", "pending_approvals_by_conversation"] })
+      router.reload({ only: ["rail", "pending_approvals_by_conversation", "sent_emails"] })
       toast.success(status === "approved" ? "Approved — the agent is proceeding" : "Rejected")
     } catch {
       toast.error("Couldn't submit the decision — try again")
@@ -882,6 +905,9 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
     ...channel_configs.filter((c) => c.enabled).map((c) => c.channel_type),
     ...conversations.map((c) => c.channel).filter(Boolean) as string[],
   ])]
+
+  const sentAwaitingCount = sent_emails.filter((e) => e.state === "awaiting_approval").length
+  const selectedSent = sent_emails.find((e) => e.id === selectedSentId) || null
 
   // Threads blocked on a human decision — count only the prefixed keys
   // (the map is dual-keyed, so summing every entry would double-count).
@@ -981,7 +1007,7 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
               {/* Channel filter tabs */}
               <div className="flex items-center gap-1 px-3 py-2 border-b border-border">
                 <button
-                  onClick={() => { setChannelFilter("all"); setSelectedConvId(null); setSelectedEmailId(null) }}
+                  onClick={() => { setChannelFilter("all"); setSelectedConvId(null); setSelectedEmailId(null); setSelectedSentId(null) }}
                   className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${channelFilter === "all" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   All
@@ -991,7 +1017,7 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
                   return (
                     <button
                       key={ch}
-                      onClick={() => { setChannelFilter(ch!); setSelectedConvId(null); setSelectedEmailId(null) }}
+                      onClick={() => { setChannelFilter(ch!); setSelectedConvId(null); setSelectedEmailId(null); setSelectedSentId(null) }}
                       className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors ${channelFilter === ch ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
                     >
                       <Icon className="size-3" />
@@ -999,6 +1025,21 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
                     </button>
                   )
                 })}
+                {/* Outbound feed. Threads bury what the agent actually sent,
+                    and show nothing at all for a draft still waiting on a
+                    human or a send SES rejected. */}
+                <button
+                  onClick={() => { setChannelFilter("sent"); setSelectedConvId(null); setSelectedEmailId(null); setSelectedSentId(null) }}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors ${channelFilter === "sent" ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  <ArrowUpRight className="size-3" />
+                  Sent
+                  {sentAwaitingCount > 0 && (
+                    <span className="rounded-sm bg-amber-500/15 px-1 py-px text-[9px] font-medium text-amber-600 dark:text-amber-400">
+                      {sentAwaitingCount}
+                    </span>
+                  )}
+                </button>
               </div>
 
               {agentPrimaryEmail && (
@@ -1015,7 +1056,37 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
               )}
 
               <div className="flex-1 overflow-y-auto">
-                {channelFilter === "email" ? (
+                {channelFilter === "sent" ? (
+                  sent_emails.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-muted-foreground">Nothing sent yet</div>
+                  ) : (
+                    sent_emails.map((e) => {
+                      const active = selectedSentId === e.id
+                      return (
+                        <button
+                          key={e.id}
+                          onClick={() => { setSelectedSentId(e.id); setSelectedConvId(null); setSelectedEmailId(null) }}
+                          className={`w-full px-4 py-3 border-b border-border text-left transition-colors ${active ? "bg-muted/60" : "hover:bg-muted/30"}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <ArrowUpRight className={`size-3 shrink-0 ${e.state === "sent" ? "text-blue-500" : e.state === "failed" ? "text-red-500" : "text-amber-500"}`} />
+                              <span className="font-medium text-xs truncate">{e.to.join(", ") || "—"}</span>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground shrink-0">{formatSmartDate(e.created_at)}</span>
+                          </div>
+                          {e.subject && <p className="text-xs font-medium mt-1 truncate">{e.subject}</p>}
+                          <div className="mt-1 flex items-center gap-1.5">
+                            <SentStateChip state={e.state} />
+                            {e.cc.length > 0 && (
+                              <span className="text-[10px] text-muted-foreground truncate">Cc {e.cc.join(", ")}</span>
+                            )}
+                          </div>
+                        </button>
+                      )
+                    })
+                  )
+                ) : channelFilter === "email" ? (
                   emails.length === 0 ? (
                     <div className="py-12 text-center text-xs text-muted-foreground">No emails</div>
                   ) : (
@@ -1452,10 +1523,37 @@ export default function AgentShow({ agent, spend, conversations, emails, chat_me
                 )
               })()}
 
-              {!selectedConvId && !selectedEmailId && (
+              {selectedSent && (
+                <SentEmailDetail
+                  email={selectedSent}
+                  agentName={agent.name}
+                  fromAddress={agentPrimaryEmail}
+                  busy={approvalBusy === selectedSent.approval_id}
+                  currentUserEmail={currentUser?.email || null}
+                  onOpenThread={(convId) => {
+                    setSelectedSentId(null)
+                    setChannelFilter("email")
+                    selectConversation({ id: convId, channel: "email" })
+                  }}
+                  onDecide={(status) =>
+                    selectedSent.approval_id
+                      ? decideApproval(approvalStub(selectedSent), status)
+                      : Promise.resolve()
+                  }
+                  onSaveEdits={(patch, send) =>
+                    selectedSent.approval_id
+                      ? saveApprovalEdits(approvalStub(selectedSent), patch, send)
+                      : Promise.resolve(false)
+                  }
+                />
+              )}
+
+              {!selectedConvId && !selectedEmailId && !selectedSent && (
                 <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
                   <MessageSquare className="size-8 mb-2 opacity-20" />
-                  <span className="text-sm">Select a conversation</span>
+                  <span className="text-sm">
+                    {channelFilter === "sent" ? "Select a sent email" : "Select a conversation"}
+                  </span>
                 </div>
               )}
             </div>
@@ -3089,6 +3187,229 @@ function WebhooksSection({ agentId, agentName, initialWebhooks }: { agentId: str
       )}
       </div>
     </div>
+  )
+}
+
+// The Sent feed carries enough of an approval to drive decideApproval /
+// saveApprovalEdits, which both key off `id` + `tool_input`. Building the
+// stub here keeps those two handlers as the single decision path for email
+// approvals no matter which pane the user is looking at.
+function approvalStub(e: SentEmailItem): InboxApproval {
+  return {
+    id: e.approval_id!,
+    message_id: null,
+    tool_name: "send_email",
+    tool_input: { to: e.to, cc: e.cc, bcc: e.bcc, subject: e.subject, body_text: e.body_text },
+    context: null,
+    status: "pending",
+    created_at: e.created_at,
+  }
+}
+
+function SentStateChip({ state }: { state: SentEmailItem["state"] }) {
+  const styles: Record<SentEmailItem["state"], string> = {
+    sent: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    awaiting_approval: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    failed: "bg-red-500/10 text-red-500 dark:text-red-400",
+  }
+  const labels: Record<SentEmailItem["state"], string> = {
+    sent: "Sent",
+    awaiting_approval: "Needs approval",
+    failed: "Failed",
+  }
+  return (
+    <span className={`rounded-sm px-1.5 py-px text-[9px] font-medium shrink-0 ${styles[state]}`}>
+      {labels[state]}
+    </span>
+  )
+}
+
+// Detail pane for a row in the Sent feed. A delivered email is read-only
+// evidence; one still waiting on a human is a live draft — editable (To /
+// Cc / Subject / body) and sendable right here, which is the fast path for
+// "cc me on that" without another round-trip through the agent.
+function SentEmailDetail({
+  email,
+  agentName,
+  fromAddress,
+  busy,
+  currentUserEmail,
+  onOpenThread,
+  onDecide,
+  onSaveEdits,
+}: {
+  email: SentEmailItem
+  agentName: string
+  fromAddress: string | null
+  busy: boolean
+  currentUserEmail: string | null
+  onOpenThread: (conversationId: number) => void
+  onDecide: (status: "approved" | "rejected") => void | Promise<void>
+  onSaveEdits: (patch: Record<string, unknown>, send: boolean) => Promise<boolean>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState({ to: "", cc: "", subject: "", body: "" })
+
+  // Reset edit state when the user clicks a different row — otherwise the
+  // previous draft's body leaks into the next card.
+  useEffect(() => {
+    setEditing(false)
+  }, [email.id])
+
+  function startEditing() {
+    setDraft({
+      to: email.to.join(", "),
+      cc: email.cc.join(", "),
+      subject: email.subject || "",
+      body: email.body_text || "",
+    })
+    setEditing(true)
+  }
+
+  function addCcMe() {
+    if (!currentUserEmail) return
+    setDraft((d) => {
+      const list = d.cc.split(",").map((x) => x.trim()).filter(Boolean)
+      if (list.some((a) => a.toLowerCase() === currentUserEmail.toLowerCase())) return d
+      return { ...d, cc: [...list, currentUserEmail].join(", ") }
+    })
+  }
+
+  async function save(send: boolean) {
+    const splitAddrs = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean)
+    const ok = await onSaveEdits(
+      { to: splitAddrs(draft.to), cc: splitAddrs(draft.cc), subject: draft.subject, body_text: draft.body },
+      send,
+    )
+    if (ok) setEditing(false)
+  }
+
+  const pending = email.state === "awaiting_approval"
+
+  return (
+    <>
+      <div className="px-5 py-4 border-b border-border space-y-2">
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="font-semibold text-base">{email.subject || "(no subject)"}</h2>
+          <div className="flex items-center gap-2 shrink-0">
+            <SentStateChip state={email.state} />
+            <span className="text-[10px] text-muted-foreground">{new Date(email.created_at).toLocaleString()}</span>
+          </div>
+        </div>
+        <div className="space-y-0.5 text-xs">
+          <div className="flex gap-2">
+            <span className="font-medium w-10 text-muted-foreground">From</span>
+            <span>{fromAddress ? `${agentName} <${fromAddress}>` : agentName}</span>
+          </div>
+          {!editing && (
+            <>
+              <div className="flex gap-2">
+                <span className="font-medium w-10 text-muted-foreground">To</span>
+                <span>{email.to.join(", ") || "—"}</span>
+              </div>
+              {email.cc.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="font-medium w-10 text-muted-foreground">Cc</span>
+                  <span>{email.cc.join(", ")}</span>
+                </div>
+              )}
+              {email.bcc.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="font-medium w-10 text-muted-foreground">Bcc</span>
+                  <span>{email.bcc.join(", ")}</span>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        {email.state === "failed" && (
+          <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs text-red-500 dark:text-red-400">
+            This email never left — {email.error}
+          </div>
+        )}
+        {pending && email.email_not_configured && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+            No email channel is connected, so approving this won't send it. Connect one on the agent's Channels page first.
+          </div>
+        )}
+
+        {editing ? (
+          <div className="space-y-1.5">
+            {([
+              ["To", "to"],
+              ["Cc", "cc"],
+              ["Subject", "subject"],
+            ] as const).map(([label, field]) => (
+              <div key={field} className="flex items-center gap-2">
+                <span className="w-12 text-xs text-muted-foreground shrink-0">{label}</span>
+                <Input
+                  value={draft[field]}
+                  onChange={(ev) => setDraft((d) => ({ ...d, [field]: ev.target.value }))}
+                  className="h-7 text-xs"
+                  placeholder={field === "subject" ? "Subject" : "a@x.com, b@y.com"}
+                />
+                {field === "cc" && currentUserEmail && (
+                  <Button variant="outline" size="sm" className="h-7 shrink-0 text-xs px-2" onClick={addCcMe}>
+                    Cc me
+                  </Button>
+                )}
+              </div>
+            ))}
+            <textarea
+              value={draft.body}
+              onChange={(ev) => setDraft((d) => ({ ...d, body: ev.target.value }))}
+              className="w-full min-h-[240px] rounded-md border bg-background p-2.5 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+            />
+          </div>
+        ) : (
+          <div className="text-sm whitespace-pre-wrap leading-relaxed">
+            {email.body_text || email.preview || <span className="text-muted-foreground">No body recorded.</span>}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-border px-5 py-3 flex gap-1.5">
+        {pending && editing && (
+          <>
+            <Button size="sm" className="h-7 text-xs px-3" disabled={busy} onClick={() => save(true)}>
+              <Check className="size-3 mr-1" />
+              {busy ? "Sending…" : "Save & send"}
+            </Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs px-3" disabled={busy} onClick={() => save(false)}>
+              <Save className="size-3 mr-1" />
+              Save
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs px-3" disabled={busy} onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </>
+        )}
+        {pending && !editing && (
+          <>
+            <Button size="sm" className="h-7 text-xs px-3" disabled={busy} onClick={() => onDecide("approved")}>
+              <Check className="size-3 mr-1" />
+              {busy ? "Sending…" : "Approve & send"}
+            </Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs px-3" disabled={busy} onClick={startEditing}>
+              <PenLine className="size-3 mr-1" />
+              Edit
+            </Button>
+            <Button variant="outline" size="sm" className="h-7 text-xs px-3" disabled={busy} onClick={() => onDecide("rejected")}>
+              <XIcon className="size-3 mr-1" />
+              Reject
+            </Button>
+          </>
+        )}
+        {email.state === "sent" && email.conversation_id && (
+          <Button variant="outline" size="sm" className="h-7 text-xs px-3" onClick={() => onOpenThread(email.conversation_id!)}>
+            Open thread
+          </Button>
+        )}
+      </div>
+    </>
   )
 }
 

@@ -207,6 +207,11 @@ class AgentsController < ApplicationController
             contact: m.conversation.contact_email || m.conversation.contact_name,
           )
         },
+      # Outbound-only feed for the inbox's "Sent" tab. The inbox groups mail
+      # into threads, which buries what the agent actually sent (and shows
+      # nothing at all for a send that failed or is still waiting on a
+      # human). This is the one place that answers "did it go out?".
+      sent_emails: build_sent_emails(@agent),
       chat_messages: chat_messages,
       agent_thinking: agent_thinking,
       # Tool steps of a run that's still in flight. The assistant message
@@ -642,6 +647,90 @@ class AgentsController < ApplicationController
                    .limit(6)
                    .map(&:card_attributes)
     end
+  end
+
+  # Everything the agent has tried to send by email, newest first, in three
+  # states:
+  #   sent               — SES accepted it (a persisted outbound Message)
+  #   awaiting_approval  — a send_email approval nobody has decided yet
+  #   failed             — SES rejected it, or the recipient is suppressed
+  #                        (no Message row is ever written for these, so the
+  #                        audit log is the only trace)
+  # Without the last two, an email that never left looks identical to one
+  # that was never drafted.
+  def build_sent_emails(agent)
+    addr_list = ->(v) { Array(v).flatten.compact.reject(&:blank?).map(&:to_s) }
+
+    sent = Message.joins(:conversation)
+      .where(conversations: { agent_id: agent.id })
+      .where(channel: "email", direction: "outbound")
+      # Replies to an email-channel job are persisted with channel="email"
+      # too, but they're chat text, not mail. Only OutboundSender writes a
+      # recipient into metadata — that's what makes a row a real send.
+      .where("messages.metadata ->> 'to' IS NOT NULL")
+      .order(created_at: :desc)
+      .limit(50)
+      .map { |m|
+        meta = m.metadata || {}
+        {
+          id: "msg-#{m.id}",
+          state: "sent",
+          conversation_id: m.conversation_id,
+          to: addr_list.call(meta["to"]),
+          cc: addr_list.call(meta["cc"]),
+          bcc: addr_list.call(meta["bcc"]),
+          subject: meta["subject"],
+          preview: m.content.to_s.truncate(160),
+          body_text: m.content.to_s,
+          sent_by_user: meta["sent_via_agent_by_user"].present?,
+          created_at: m.created_at
+        }
+      }
+
+    awaiting = agent.pending_approvals
+      .where(status: "pending", tool_name: "send_email")
+      .order(created_at: :desc)
+      .limit(25)
+      .map { |a|
+        input = a.tool_input.is_a?(Hash) ? a.tool_input : {}
+        {
+          id: "approval-#{a.id}",
+          state: "awaiting_approval",
+          approval_id: a.id,
+          conversation_id: input["conversation_id"],
+          to: addr_list.call(input["to"]),
+          cc: addr_list.call(input["cc"]),
+          bcc: addr_list.call(input["bcc"]),
+          subject: input["subject"],
+          preview: input["body_text"].to_s.truncate(160),
+          body_text: input["body_text"].to_s,
+          email_not_configured: input["email_not_configured"] == true,
+          created_at: a.created_at
+        }
+      }
+
+    failed = AuditLog
+      .where(agent_id: agent.id, action: [ "email_failed", "email_suppressed" ])
+      .order(created_at: :desc)
+      .limit(25)
+      .map { |l|
+        input = l.input.is_a?(Hash) ? l.input : {}
+        output = l.output.is_a?(Hash) ? l.output : {}
+        {
+          id: "audit-#{l.id}",
+          state: "failed",
+          to: addr_list.call(input["to"]),
+          cc: addr_list.call(input["cc"]),
+          bcc: addr_list.call(input["bcc"]),
+          subject: input["subject"],
+          preview: nil,
+          body_text: nil,
+          error: output["error"] || output["reason"] || (l.action == "email_suppressed" ? "Recipient is on the suppression list" : "Send failed"),
+          created_at: l.created_at
+        }
+      }
+
+    (sent + awaiting + failed).sort_by { |e| e[:created_at] }.reverse.first(50)
   end
 
   # Right-rail payload for the agent show page. One round-trip of small

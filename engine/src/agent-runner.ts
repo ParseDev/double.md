@@ -14,7 +14,7 @@ import { buildRecallMcpServer } from "./tools/recall.js";
 import { buildSendMediaMcpServer } from "./tools/send-media.js";
 import { buildSchedulingMcpServer } from "./tools/scheduling.js";
 import { buildTasksMcpServer } from "./tools/tasks.js";
-import { buildApprovalsMcpServer } from "./tools/approvals.js";
+import { buildApprovalsMcpServer, noteEmailApproval } from "./tools/approvals.js";
 import { buildConnectionsMcpServer } from "./tools/connections.js";
 import { resolveActionApproval } from "./security/action-approval.js";
 import { createQueryState, type QueryState } from "./tools/integrations.js";
@@ -34,6 +34,7 @@ import { redactSecrets } from "./security/credential-filter.js";
 import { ToolInterceptor } from "./tool-interceptor.js";
 import { checkSpendCap, markSpendNotified } from "./spend-caps.js";
 import { processOutbox } from "./email/outbox-processor.js";
+import { clearEmailPreApprovals } from "./email/pre-approval.js";
 import { maybeHandleApprovalResponse, formatChannelApprovalPreview } from "./email/approval-handler.js";
 import {
   broadcast,
@@ -100,6 +101,21 @@ async function runAgentUnlocked(agent: Agent, job: JobData): Promise<void> {
   // again, which is harmless.
   if (job.type === "scheduled_task" && job.payload?.taskId) {
     await host.updateScheduledWorkLastRun(job.payload.taskId).catch(() => {});
+  }
+
+  // Any email consent left over from an earlier turn is stale — a grant only
+  // covers the run it was given in. Replay it here for the resume case:
+  // when the human decides after the turn already released its wait, Rails
+  // wakes us with the decision, and the email the agent is about to re-draft
+  // must NOT trigger a second approval card.
+  clearEmailPreApprovals();
+  const resumedApproval = job.payload as { approvalPayloadType?: string; approvalDecision?: string; approvalSummary?: string } | undefined;
+  if (resumedApproval?.approvalPayloadType && resumedApproval.approvalDecision) {
+    noteEmailApproval(
+      resumedApproval.approvalPayloadType,
+      resumedApproval.approvalDecision,
+      `resumed approval "${resumedApproval.approvalSummary || resumedApproval.approvalPayloadType}"`,
+    );
   }
 
   // Short-circuit: YES/NO replies on non-web channels are approval responses,
@@ -565,12 +581,13 @@ async function runAgentUnlocked(agent: Agent, job: JobData): Promise<void> {
     }
 
     // Process any emails the agent drafted (outbox files + intercepted Write calls)
-    const approvalResults = await processOutbox(
+    const outbox = await processOutbox(
       agent,
       job,
       savedMessageId,
       result.interceptor.capturedEmails(),
     );
+    const approvalResults = outbox.approvals;
 
     // For non-web channels, show approval prompts.
     // Telegram: inline keyboard buttons (tap to approve/reject)
@@ -619,6 +636,17 @@ async function runAgentUnlocked(agent: Agent, job: JobData): Promise<void> {
       }
     }
 
+    // Web: the model routinely writes "Email sent!" the moment it drops a
+    // file in the outbox — but a draft-permission agent hasn't sent anything
+    // until a human clicks approve. Append the truth so the reply and the
+    // card can't disagree.
+    if (approvalResults.length > 0 && (!job.channel || job.channel === "web")) {
+      const n = approvalResults.length;
+      finalResponse +=
+        `\n\n_📧 Not sent yet — ${n} email draft${n > 1 ? "s are" : " is"} waiting on your approval. ` +
+        `Approve it on the card here, or from the agent's **Inbox → Sent** tab._`;
+    }
+
     // Only emit done for inbound messages — heartbeats and scheduled tasks
     // are background jobs that shouldn't trigger Telegram/channel responses.
     // The [SILENT] prefix lets scheduled/one-off jobs with an instruction
@@ -660,9 +688,21 @@ async function runAgentUnlocked(agent: Agent, job: JobData): Promise<void> {
     // stay audit-only. For "web", we persist to the agent's internal chat
     // conversation so the user sees it on next visit / via ActionCable.
     if (job.type === "scheduled_task" && !isSilent && finalResponse && job.channel) {
-      await deliverScheduledResponse(agent, job, finalResponse).catch((err) => {
+      const deliveredMessageId = await deliverScheduledResponse(agent, job, finalResponse).catch((err) => {
         logger.error("Failed to deliver scheduled task response", { error: (err as Error).message, channel: job.channel });
+        return null;
       });
+      // Scheduled/resumed runs have no conversation of their own, so the
+      // approvals raised above were saved with message_id = NULL — which
+      // makes them invisible in the chat AND in the inbox thread badge.
+      // The delivered message is the row they belong to; attach them now.
+      if (deliveredMessageId && approvalResults.length > 0 && !savedMessageId) {
+        for (const a of approvalResults) {
+          await host.attachApprovalToMessage(a.approvalId, deliveredMessageId).catch((err) => {
+            logger.warn(`Failed to attach approval ${a.approvalId} to message ${deliveredMessageId}`, { error: (err as Error).message });
+          });
+        }
+      }
     }
 
     spans.end(rootSpan, { status: "success" });
@@ -1922,7 +1962,10 @@ async function buildQueryOptions(
 // - web:      persists a message to the agent's internal conversation for the
 //             assigned user so the Inertia chat tab renders it on next visit,
 //             plus notifies Rails so ActionCable can push it live.
-async function deliverScheduledResponse(agent: Agent, job: JobData, content: string): Promise<void> {
+// Returns the id of the persisted internal-chat message for the "web"
+// channel (null for every other channel) so the caller can back-fill any
+// approvals this run raised without a conversation of their own.
+async function deliverScheduledResponse(agent: Agent, job: JobData, content: string): Promise<number | null> {
   const meta = (job.payload?.metadata || {}) as Record<string, unknown>;
   const channel = job.channel;
 
@@ -1931,7 +1974,7 @@ async function deliverScheduledResponse(agent: Agent, job: JobData, content: str
     const chatId = meta.chat_id as string | number | undefined;
     if (!botToken || !chatId) {
       logger.warn("Scheduled delivery: telegram channel missing bot_token or chat_id");
-      return;
+      return null;
     }
     await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: "POST",
@@ -1939,19 +1982,19 @@ async function deliverScheduledResponse(agent: Agent, job: JobData, content: str
       body: JSON.stringify({ chat_id: chatId, text: content, parse_mode: "Markdown" }),
     });
     logger.info(`Scheduled delivery: sent to Telegram chat ${chatId} (${content.length} chars)`);
-    return;
+    return null;
   }
 
   if (channel === "whatsapp") {
     const from = meta.from as string | undefined;
     if (!from) {
       logger.warn("Scheduled delivery: whatsapp channel missing `from` metadata");
-      return;
+      return null;
     }
     const { sendMessage } = await import("./channels/whatsapp.js");
     await sendMessage(from, content);
     logger.info(`Scheduled delivery: sent to WhatsApp ${from} (${content.length} chars)`);
-    return;
+    return null;
   }
 
   if (channel === "slack") {
@@ -1963,7 +2006,7 @@ async function deliverScheduledResponse(agent: Agent, job: JobData, content: str
       const { deliverSlackReply } = await import("./channels/slack.js");
       await deliverSlackReply({ agentId: agent.id, channel: "", text: content });
       logger.info(`Scheduled delivery: posted to Slack (agent home channel, ${content.length} chars)`);
-      return;
+      return null;
     }
     const { deliverSlackReply } = await import("./channels/slack.js");
     await deliverSlackReply({
@@ -1973,7 +2016,7 @@ async function deliverScheduledResponse(agent: Agent, job: JobData, content: str
       thread_ts: (meta.thread_ts as string) || undefined,
     });
     logger.info(`Scheduled delivery: posted to Slack ${slackChannel} (${content.length} chars)`);
-    return;
+    return null;
   }
 
   if (channel === "web") {
@@ -1983,7 +2026,7 @@ async function deliverScheduledResponse(agent: Agent, job: JobData, content: str
     const conv = await host.getInternalConversation(agent.id);
     if (!conv) {
       logger.warn("Scheduled delivery: web channel has no internal conversation yet");
-      return;
+      return null;
     }
     const msg = await host.saveMessage(
       conv.id,
@@ -1995,10 +2038,11 @@ async function deliverScheduledResponse(agent: Agent, job: JobData, content: str
       { source: "scheduled_task", scheduled_work_id: job.payload?.taskId ?? null },
     );
     logger.info(`Scheduled delivery: saved message ${msg.id} to internal conversation ${conv.id}`);
-    return;
+    return msg.id;
   }
 
   logger.warn(`Scheduled delivery: unsupported channel "${channel}" — message dropped`);
+  return null;
 }
 
 // Step 6 — notify Rails to broadcast via ActionCable when a task conversation

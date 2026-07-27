@@ -273,6 +273,17 @@ export class PostgresHost implements Host {
     return rows[0].id;
   }
 
+  // Back-fill for approvals raised by a run with no conversation of its own
+  // (scheduled tasks, approval-resume continuations). Only fills a NULL —
+  // never re-points an approval that already belongs to a message.
+  async attachApprovalToMessage(approvalId: number, messageId: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE pending_approvals SET message_id = $1, updated_at = NOW()
+       WHERE id = $2 AND message_id IS NULL`,
+      [messageId, approvalId],
+    );
+  }
+
   // Generic action approvals (Item 4) — separate from email-only
   // pending_approvals usage. Sets the new columns added by
   // ExtendPendingApprovals migration.

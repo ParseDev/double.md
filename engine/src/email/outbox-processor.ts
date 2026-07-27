@@ -5,6 +5,7 @@ import { host } from "../host/index.js";
 import { emitApproval } from "../gateway.js";
 import { logger } from "../logger.js";
 import { uploadAttachment } from "./attachment-uploader.js";
+import { consumeEmailPreApproval } from "./pre-approval.js";
 import type { Agent, JobData } from "../types.js";
 import type { CapturedEmail } from "../tool-interceptor.js";
 
@@ -19,6 +20,20 @@ export interface ApprovalResult {
   email_not_configured?: boolean;
 }
 
+export interface SentResult {
+  to: string;
+  subject: string;
+}
+
+// What the outbox did with this run's drafts. `approvals` still need a human
+// decision; `sent` already went out (auto permission, or a draft the human
+// pre-approved via request_approval). agent-runner reports both back to the
+// user so the reply can't claim "sent" for something still sitting in a card.
+export interface OutboxResult {
+  approvals: ApprovalResult[];
+  sent: SentResult[];
+}
+
 // Processes the email outbox after an agent run.
 // Combines files written to disk + emails captured from tool calls.
 // Routes each email through the permission system: never / draft (approval) / auto (send).
@@ -27,8 +42,8 @@ export async function processOutbox(
   job: JobData,
   messageId?: number | null,
   capturedEmails?: CapturedEmail[],
-): Promise<ApprovalResult[]> {
-  const results: ApprovalResult[] = [];
+): Promise<OutboxResult> {
+  const results: OutboxResult = { approvals: [], sent: [] };
 
   const channels = await host.getChannelConfigs(String(agent.id));
   const emailConfig = channels.find((c) => c.channel_type === "email");
@@ -48,7 +63,8 @@ export async function processOutbox(
     for (const content of emailsToProcess) {
       try {
         const result = await processOneEmail(content, agent, null, messageId, conversationId);
-        if (result) results.push(result);
+        if (result?.kind === "approval") results.approvals.push(result.approval);
+        if (result?.kind === "sent") results.sent.push(result.sent);
       } catch (err) {
         logger.error(`Failed to surface captured email to ${content.to}`, { error: (err as Error).message });
       }
@@ -59,7 +75,8 @@ export async function processOutbox(
   for (const content of emailsToProcess) {
     try {
       const result = await processOneEmail(content, agent, emailConfig, messageId, conversationId);
-      if (result) results.push(result);
+      if (result?.kind === "approval") results.approvals.push(result.approval);
+      if (result?.kind === "sent") results.sent.push(result.sent);
     } catch (err) {
       logger.error(`Failed to process email to ${content.to}`, { error: (err as Error).message });
     }
@@ -100,13 +117,18 @@ function collectEmails(capturedEmails?: CapturedEmail[]): CapturedEmail[] {
   return emails;
 }
 
+type OneEmailOutcome =
+  | { kind: "approval"; approval: ApprovalResult }
+  | { kind: "sent"; sent: SentResult }
+  | null;
+
 async function processOneEmail(
   content: CapturedEmail,
   agent: Agent,
   emailConfig: { config: Record<string, unknown> } | null,
   messageId?: number | null,
   conversationId?: number | null,
-): Promise<ApprovalResult | null> {
+): Promise<OneEmailOutcome> {
   // Upload attachments if specified
   const attachmentIds: string[] = [];
   if (Array.isArray(content.attachments)) {
@@ -135,7 +157,18 @@ async function processOneEmail(
   // Force draft mode when email isn't connected — the message can't be sent
   // anyway, but the user gets to preview what the agent wrote and either
   // connect email + approve, or copy/paste it elsewhere.
-  const permLevel = emailConfig == null ? "draft" : (agent.permissions?.["send_email"] || "auto");
+  let permLevel = emailConfig == null ? "draft" : (agent.permissions?.["send_email"] || "auto");
+
+  // The human already said yes to this draft on a request_approval card.
+  // Raising a second send_email approval here would strand the message: the
+  // user approved once, sees "waiting" nowhere, and nothing goes out.
+  if (permLevel === "draft" && emailConfig != null) {
+    const grant = consumeEmailPreApproval();
+    if (grant) {
+      logger.info(`Skipping second approval for ${content.to} — already approved (${grant})`);
+      permLevel = "auto";
+    }
+  }
 
   if (permLevel === "never") {
     logger.info(`Email blocked by permissions: ${content.to}`);
@@ -154,16 +187,19 @@ async function processOneEmail(
     emitApproval(approvalId, "send_email", emailPayload);
     logger.info(`Email queued for approval: ${content.to}`);
     return {
-      approvalId,
-      to: content.to,
-      subject: content.subject || "(no subject)",
-      body_text: content.body_text || "",
-      email_not_configured: emailConfig == null,
+      kind: "approval",
+      approval: {
+        approvalId,
+        to: content.to,
+        subject: content.subject || "(no subject)",
+        body_text: content.body_text || "",
+        email_not_configured: emailConfig == null,
+      },
     };
   }
 
   // auto: send immediately via host (Rails enqueues SendEmailJob)
   await host.sendEmail(emailPayload);
   logger.info(`Email sent: ${content.to}`);
-  return null;
+  return { kind: "sent", sent: { to: content.to, subject: content.subject || "(no subject)" } };
 }
