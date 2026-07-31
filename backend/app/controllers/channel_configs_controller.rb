@@ -116,8 +116,8 @@ class ChannelConfigsController < ApplicationController
     # Clean up SES receipt rule on email disconnect
     if config.channel_type == "email" && config.config["address"].present?
       begin
-        rule_name = "alchemy-#{config.config['address'].gsub(/[^a-z0-9]/i, '-')}"
-        ses_client.delete_receipt_rule(rule_set_name: "alchemy-inbound", rule_name: rule_name)
+        rule_name = Email::ReceiptRule.name_for(config.config["address"])
+        ses_client.delete_receipt_rule(rule_set_name: Email::ReceiptRule::RULE_SET, rule_name: rule_name)
       rescue => e
         Rails.logger.warn "SES cleanup: #{e.message}"
       end
@@ -228,9 +228,6 @@ class ChannelConfigsController < ApplicationController
   end
 
   def setup_ses_inbound(address)
-    region = ENV.fetch("AWS_REGION", "us-east-1")
-    account_id = ENV["AWS_ACCOUNT_ID"]
-
     # 1. Create or find SNS topics for this org (inbound, bounce, complaint)
     topic_arn = current_tenant.email_sns_topic_arn.presence || begin
       arn = sns_client.create_topic(name: "alchemy-email-#{current_tenant.slug}").topic_arn
@@ -264,41 +261,17 @@ class ChannelConfigsController < ApplicationController
       Rails.logger.warn "Failed to set SES notification topics: #{e.message}"
     end
 
-    # 3. Ensure receipt rule set exists
-    rule_set_name = "alchemy-inbound"
-    begin
-      ses_client.describe_receipt_rule_set(rule_set_name: rule_set_name)
-    rescue Aws::SES::Errors::RuleSetDoesNotExist
-      ses_client.create_receipt_rule_set(rule_set_name: rule_set_name)
-      # Activate the rule set
-      ses_client.set_active_receipt_rule_set(rule_set_name: rule_set_name)
-    end
+    # 3. Ensure the bucket SES writes inbound mail into exists
+    bucket = Email::InboundBucket.ensure!(current_tenant)
 
-    # 4. Create receipt rule for this email address
-    rule_name = "alchemy-#{address.gsub(/[^a-z0-9]/i, '-')}"
-    begin
-      ses_client.create_receipt_rule(
-        rule_set_name: rule_set_name,
-        rule: {
-          name: rule_name,
-          enabled: true,
-          recipients: [ address ],
-          actions: [
-            {
-              sns_action: {
-                topic_arn: topic_arn,
-                encoding: "UTF-8"
-              }
-            }
-          ],
-          scan_enabled: true
-        }
-      )
-    rescue Aws::SES::Errors::AlreadyExists
-      # Rule already exists — fine
-    end
+    # 4. Ensure receipt rule set exists and is active
+    Email::ReceiptRule.ensure_rule_set!(ses_client)
 
-    Rails.logger.info "SES inbound configured: #{address} → #{topic_arn} → #{webhook_base_url}/webhooks/email"
+    # 5. Create (or repair) the receipt rule for this email address
+    rule = Email::ReceiptRule.build(address: address, bucket: bucket, topic_arn: topic_arn)
+    Email::ReceiptRule.upsert(ses_client, rule)
+
+    Rails.logger.info "SES inbound configured: #{address} → s3://#{bucket}/#{Email::InboundBucket::KEY_PREFIX} → #{topic_arn} → #{webhook_base_url}/webhooks/email"
   end
 
   def configure_twilio_webhooks(number, channel_type)
