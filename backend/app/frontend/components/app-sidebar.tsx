@@ -251,7 +251,7 @@ function AgentRow({
         <span className="inline-block size-3 shrink-0" />
       )}
       <Link href={href} className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2 text-[12.5px]" prefetch>
-        <AgentBlob name={node.name} size={18} animate={false} className="shrink-0" />
+        <AgentBlob name={node.name} size={24} animate={false} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
         {node.status === "running" && (
           <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" title="Running" />
