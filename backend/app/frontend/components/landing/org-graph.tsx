@@ -1,3 +1,4 @@
+import { blobatar } from "blobatar/blob"
 import { useEffect, useRef, useState } from "react"
 
 /**
@@ -108,18 +109,6 @@ export function OrgGraph() {
         <stop offset="0%" stop-color="#1a1a24"/>
         <stop offset="100%" stop-color="#0f0f18"/>
       </linearGradient>
-      <linearGradient id="avatar-ceo" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#00e0e0"/>
-        <stop offset="100%" stop-color="#0089ff"/>
-      </linearGradient>
-      <linearGradient id="avatar-vp" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#818cf8"/>
-        <stop offset="100%" stop-color="#4338ca"/>
-      </linearGradient>
-      <linearGradient id="avatar-spec" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#6366f1"/>
-        <stop offset="100%" stop-color="#312e81"/>
-      </linearGradient>
       <linearGradient id="edge-flow" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#818cf8" stop-opacity="0.5"/>
         <stop offset="100%" stop-color="#00e0e0" stop-opacity="0.15"/>
@@ -222,35 +211,23 @@ export function OrgGraph() {
       }
       g.appendChild(stripe)
 
-      // Avatar circle (left of text)
+      // Blobatar (left of text). A nested <svg> keeps the blobatar's own
+      // 0 0 100 100 viewBox, so it scales to the box without touching its
+      // path data. Nothing in a blobatar uses element ids, so nine of them
+      // in one document cannot collide.
       const ax = 22
       const ay = n.h / 2
       const ar = 12
-      const avatar = document.createElementNS(SVG_NS, "circle")
-      avatar.setAttribute("cx", String(ax))
-      avatar.setAttribute("cy", String(ay))
-      avatar.setAttribute("r", String(ar))
-      avatar.setAttribute(
-        "fill",
-        n.tier === 0 ? "url(#avatar-ceo)" : n.tier === 1 ? "url(#avatar-vp)" : "url(#avatar-spec)",
-      )
-      avatar.setAttribute("stroke", "rgba(255,255,255,0.25)")
-      avatar.setAttribute("stroke-width", "0.8")
-      g.appendChild(avatar)
-
-      // Avatar initial
-      const initial = document.createElementNS(SVG_NS, "text")
-      initial.setAttribute("x", String(ax))
-      initial.setAttribute("y", String(ay))
-      initial.setAttribute("text-anchor", "middle")
-      initial.setAttribute("dominant-baseline", "central")
-      initial.setAttribute("font-family", "DM Sans, sans-serif")
-      initial.setAttribute("font-size", "11")
-      initial.setAttribute("font-weight", "700")
-      initial.setAttribute("letter-spacing", "-0.02em")
-      initial.setAttribute("fill", "#0a0a0a")
-      initial.textContent = n.name[0]
-      g.appendChild(initial)
+      const holder = document.createElementNS(SVG_NS, "g")
+      holder.innerHTML = blobatar(n.name)
+      const face = holder.firstElementChild
+      if (face) {
+        face.setAttribute("x", String(ax - ar))
+        face.setAttribute("y", String(ay - ar))
+        face.setAttribute("width", String(ar * 2))
+        face.setAttribute("height", String(ar * 2))
+      }
+      g.appendChild(holder)
 
       // Name
       const nameText = document.createElementNS(SVG_NS, "text")

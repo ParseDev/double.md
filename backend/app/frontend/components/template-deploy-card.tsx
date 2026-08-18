@@ -1,10 +1,10 @@
 import { Link } from "@inertiajs/react"
 import { GitBranch, Rocket, Sparkles, Star, Users } from "lucide-react"
 
+import { AgentBlob } from "@/components/agent-blob"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { RobotCharacter } from "@/components/robot-character"
 
 export interface DeployTemplate {
   slug: string
@@ -75,8 +75,8 @@ export function TemplateDeployCard({ t }: { t: DeployTemplate }) {
 
       <CardContent className="flex flex-1 flex-col items-center gap-2 p-4 pt-5 text-center">
         <Link href={viewHref(t.slug)} aria-label={`View ${t.name}`}>
-          <RobotCharacter
-            seed={t.slug}
+          <AgentBlob
+            name={t.slug}
             size={92}
             className="drop-shadow-sm transition-transform hover:scale-105"
           />

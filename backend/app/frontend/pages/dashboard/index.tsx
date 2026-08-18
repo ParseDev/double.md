@@ -11,6 +11,7 @@ import {
   Zap,
 } from "lucide-react"
 
+import { AgentBlob } from "@/components/agent-blob"
 import { GlowCard, Overline, StatTile, StatusDot } from "@/components/brand"
 import { Button } from "@/components/ui/button"
 import AppLayout from "@/layouts/app-layout"
@@ -179,16 +180,8 @@ function AgentCard({ agent }: { agent: Agent }) {
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
             <div className="relative">
-              <div
-                className="flex size-10 items-center justify-center rounded-md border font-display text-sm font-semibold text-foreground"
-                style={{
-                  borderColor: "var(--cyan-border)",
-                  background: "var(--cyan-surface)",
-                }}
-              >
-                {agent.name.slice(0, 2).toUpperCase()}
-              </div>
-              <span className="absolute -bottom-0.5 -right-0.5">
+              <AgentBlob name={agent.name} size={40} />
+              <span className="absolute bottom-0.5 right-0.5">
                 <StatusDot status={st.dot} pulse={agent.status === "running"} ring />
               </span>
             </div>

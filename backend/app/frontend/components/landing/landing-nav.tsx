@@ -6,12 +6,11 @@ import { useTheme } from "@/hooks/use-theme"
 import { dashboardPath, newUserRegistrationPath } from "@/routes"
 import type { SharedProps } from "@/types"
 
+// The landing page is one screen now, so the in-page anchors these used to
+// scroll to (#platform, #demo) no longer exist — and #integrations / #docs
+// never did. Only links that land somewhere real belong here.
 const LINKS: { label: string; href: string; menu?: boolean }[] = [
-  { label: "Platform", href: "#platform", menu: true },
   { label: "Use cases", href: "/use-cases" },
-  { label: "Agents", href: "#demo", menu: true },
-  { label: "Toolkits", href: "#integrations" },
-  { label: "Docs", href: "#docs" },
 ]
 
 export function LandingNav() {
