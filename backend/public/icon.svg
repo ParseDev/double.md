@@ -1,12 +1,1 @@
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#6366f1"/>
-      <stop offset="100%" stop-color="#06b6d4"/>
-    </linearGradient>
-  </defs>
-  <g transform="translate(256,256) rotate(45)">
-    <rect x="-200" y="-200" width="400" height="400" rx="40" fill="url(#g)"/>
-    <rect x="-110" y="-110" width="220" height="220" rx="20" fill="#fff"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512"><title>Sentrel</title><g fill="#1c89e4"><path d="M88.01 49.08C88.01 72.24 71.94 89.23 50.03 89.23C28.12 89.23 12.05 72.24 12.05 49.08C12.05 25.93 28.12 8.94 50.03 8.94C71.94 8.94 88.01 25.93 88.01 49.08Z"/></g><g fill="#091018"><path d="M41.88 50.09C42.09 59.01 42.09 59.01 39.16 59.08C36.23 59.15 36.23 59.15 36.02 50.23C35.8 41.31 35.8 41.31 38.73 41.24C41.66 41.16 41.66 41.16 41.88 50.09Z"/><path d="M65.49 50.27C65.56 57.86 65.56 57.86 62.98 57.89C60.4 57.91 60.4 57.91 60.33 50.32C60.25 42.73 60.25 42.73 62.83 42.7C65.41 42.68 65.41 42.68 65.49 50.27Z"/></g></svg>

@@ -38,11 +38,19 @@ export default function LandingPage() {
  *
  *  - It has a white backdrop, not a transparent one. The circular clip is what
  *    turns that into a deliberate disc instead of a white square on a dark
- *    page, and `scale-[1.42]` pushes the backdrop past the clip so the body
- *    fills it.
- *  - It is an intro, not a loop — it opens tiny and ends at rest — so it plays
- *    once. Looping it would snap the blob back to nothing every 2.7s.
+ *    page, and `scale-[1.6]` pushes the backdrop past the clip so the body
+ *    fills it. Much past that and the eyes start clipping on the hardest
+ *    tilt, around 1.6s.
+ *  - It is an intro, not a seamless loop: it opens on a near-empty white disc
+ *    and ends full-bleed. `loop` would therefore cut to a white flash every
+ *    2.7s, which is why the wrap is done by hand below.
  */
+
+/** Where a repeat starts — past the grow-in, where the frame already matches
+ *  the clip's last one. Restarting at 0 is what makes a plain loop flash. */
+const LOOP_FROM = 0.45
+const WRAP_FADE_MS = 220
+
 function Hero() {
   const cta = useCta()
   const video = useRef<HTMLVideoElement>(null)
@@ -50,15 +58,36 @@ function Hero() {
   useEffect(() => {
     const el = video.current
     if (!el) return
-    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
-    // Reduced motion gets the destination, not the journey: hold the last
-    // frame, where the blobatar is settled and full-size.
-    el.pause()
-    const settle = () => {
-      el.currentTime = el.duration
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      // Reduced motion gets the destination, not the journey: hold the last
+      // frame, where the blobatar is settled and full-size.
+      el.pause()
+      const settle = () => {
+        el.currentTime = el.duration
+      }
+      if (el.readyState >= 1) settle()
+      else el.addEventListener("loadedmetadata", settle, { once: true })
+      return
     }
-    if (el.readyState >= 1) settle()
-    else el.addEventListener("loadedmetadata", settle, { once: true })
+
+    // Loop by hand so the intro plays in full once and every repeat after it
+    // starts from a frame that already matches the one it is replacing. The
+    // short dip covers the small difference that is left.
+    let timer = 0
+    const wrap = () => {
+      el.style.opacity = "0"
+      timer = window.setTimeout(() => {
+        el.currentTime = LOOP_FROM
+        void el.play()
+        el.style.opacity = "1"
+      }, WRAP_FADE_MS)
+    }
+    el.addEventListener("ended", wrap)
+    return () => {
+      el.removeEventListener("ended", wrap)
+      window.clearTimeout(timer)
+    }
   }, [])
 
   return (
@@ -83,7 +112,8 @@ function Hero() {
             playsInline
             preload="auto"
             aria-label="A Sentrel agent"
-            className="block w-full scale-[1.42]"
+            className="block w-full scale-[1.6] transition-opacity"
+            style={{ transitionDuration: `${WRAP_FADE_MS}ms` }}
           />
         </div>
 
