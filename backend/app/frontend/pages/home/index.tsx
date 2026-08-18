@@ -1,5 +1,5 @@
 import { Head, Link, usePage } from "@inertiajs/react"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, GitBranch } from "lucide-react"
 import { useEffect, useRef } from "react"
 
 import { StatusDot } from "@/components/brand"
@@ -154,6 +154,20 @@ function Hero() {
           <span>no credit card</span>
           <span className="opacity-40">·</span>
           <span>Slack · Gmail · 250+ apps</span>
+          <span className="opacity-40">·</span>
+          {/* "Source available", not "open source": the repo is public but
+              carries no LICENSE, and the README states a custom
+              source-available license is still TBD. Flip the wording once an
+              OSI license actually lands. */}
+          <a
+            href="https://github.com/SentrelAI/sentrel"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 transition-colors hover:text-foreground"
+          >
+            <GitBranch className="size-3" />
+            source available
+          </a>
         </div>
       </div>
     </section>
