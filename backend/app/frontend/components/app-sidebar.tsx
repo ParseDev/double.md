@@ -1,27 +1,14 @@
 import { Link, usePage } from "@inertiajs/react"
 import { AgentBlob } from "@/components/agent-blob"
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import {
-  LayoutGrid,
-  CheckSquare,
   Plug,
-  TrendingUp,
-  ShieldCheck,
-  ScrollText,
-  Activity,
-  Settings,
-  Users,
   Plus,
   Sun,
   Moon,
   PanelLeftClose,
   PanelLeft,
-  KeyRound,
-  BookMarked,
-  Wrench,
-  Shield,
   ChevronRight,
-  Library,
   CornerDownRight,
   AlertCircle,
 } from "lucide-react"
@@ -45,11 +32,7 @@ import {
 import {
   dashboardPath,
   agentsPath,
-  tasksPath,
   integrationsPath,
-  pendingApprovalsPath,
-  auditLogsPath,
-  settingsPath,
   newAgentPath,
 } from "@/routes"
 
@@ -72,26 +55,10 @@ interface SharedProps {
   agents_tree?: AgentNode[] | null
 }
 
-// Persisted expand state. Each agent (by id) + each group remembers whether
-// it's open between page navigations. Cleared on logout (localStorage scoped).
-function useExpandState(storageKey: string, initialOpen: boolean = false) {
-  const [open, setOpen] = useState<boolean>(() => {
-    if (typeof window === "undefined") return initialOpen
-    const raw = window.localStorage.getItem(storageKey)
-    return raw == null ? initialOpen : raw === "1"
-  })
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem(storageKey, open ? "1" : "0")
-  }, [storageKey, open])
-  return [open, setOpen] as const
-}
-
 export function AppSidebar() {
   const { theme, setTheme } = useTheme()
   const { toggleSidebar, open } = useSidebar()
   const { props, url } = usePage<SharedProps>()
-  const isPlatformAdmin = props.is_platform_admin === true
   const agents = props.agents_tree || []
 
   return (
@@ -148,35 +115,15 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Top-level operational items — the things users hit constantly. */}
-        <SidebarGroup>
+        {/* Everything that is not an agent lives in the user menu now. The
+            one exception is Integrations: connecting a tool is part of getting
+            an agent working, so it stays one click from the roster. */}
+        <SidebarGroup className="mt-auto">
           <SidebarGroupContent>
-            <SidebarLink href={dashboardPath()} icon={LayoutGrid} label="Dashboard" current={url} />
-            <SidebarLink href={tasksPath()}     icon={CheckSquare} label="Tasks"   current={url} />
-            <SidebarLink href={pendingApprovalsPath()} icon={ShieldCheck} label="Approvals" current={url} />
+            <SidebarLink href={integrationsPath()} icon={Plug} label="Plugins" current={url} />
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Library — templates / skills / integrations / reports. */}
-        <CollapsibleNav storageKey="sidebar.library" label="Library" icon={Library} currentUrl={url}>
-          <SidebarLink href={integrationsPath()} icon={Plug}        label="Integrations" current={url} indent />
-          <SidebarLink href="/agent_templates"   icon={BookMarked}  label="Templates"    current={url} indent />
-          <SidebarLink href="/skills"            icon={Wrench}      label="Skills"       current={url} indent />
-          <SidebarLink href="/reports"           icon={TrendingUp}  label="Reports"      current={url} indent />
-        </CollapsibleNav>
-
-        {/* Settings + ops — everything that used to live in "Control panel".
-            Collapsed by default; remembers expanded state per browser. */}
-        <CollapsibleNav storageKey="sidebar.settings" label="Settings" icon={Settings} currentUrl={url} className="mt-auto">
-          <SidebarLink href="/ops/runs"             icon={Activity}    label="Ops"         current={url} indent />
-          <SidebarLink href={auditLogsPath()}       icon={ScrollText}  label="Audit Log"   current={url} indent />
-          <SidebarLink href="/invitations"          icon={Users}       label="Team"        current={url} indent />
-          <SidebarLink href="/settings/credentials" icon={KeyRound}    label="Credentials" current={url} indent />
-          <SidebarLink href={settingsPath()}        icon={Settings}    label="Workspace"   current={url} indent />
-          {isPlatformAdmin && (
-            <SidebarLink href="/admin/dashboard"    icon={Shield}      label="Admin"       current={url} indent />
-          )}
-        </CollapsibleNav>
       </SidebarContent>
 
       <SidebarFooter>
@@ -335,63 +282,6 @@ function AgentRow({
 
 // ── Collapsible group ───────────────────────────────────────────────
 
-function CollapsibleNav({
-  storageKey,
-  label,
-  icon: Icon,
-  children,
-  currentUrl,
-  className,
-}: {
-  storageKey: string
-  label: string
-  icon: typeof LayoutGrid
-  children: React.ReactNode
-  currentUrl: string
-  className?: string
-}) {
-  // Heuristic: if any descendant link matches the current URL, default open.
-  const childUrls = collectChildHrefs(children)
-  const childActive = childUrls.some((h) => currentUrl.startsWith(h))
-  const [open, setOpen] = useExpandState(storageKey, childActive)
-
-  return (
-    <SidebarGroup className={className}>
-      <SidebarGroupContent>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] font-medium transition-colors ${
-            childActive ? "text-foreground" : "text-foreground/85 hover:bg-sidebar-accent hover:text-foreground"
-          }`}
-        >
-          <ChevronRight className={`size-3 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
-          <Icon className="size-3.5 text-muted-foreground" />
-          <span className="flex-1">{label}</span>
-        </button>
-        {open && <div className="mt-0.5 space-y-0.5">{children}</div>}
-      </SidebarGroupContent>
-    </SidebarGroup>
-  )
-}
-
-function collectChildHrefs(children: React.ReactNode): string[] {
-  const out: string[] = []
-  // SidebarLink-only — duck-type by reading props.href off React children.
-  // Doesn't recurse; we don't nest groups today.
-  if (!children) return out
-  const arr = Array.isArray(children) ? children : [ children ]
-  for (const c of arr) {
-    if (c && typeof c === "object" && "props" in c) {
-      const href = (c as { props: { href?: string } }).props.href
-      if (typeof href === "string") out.push(href)
-    }
-  }
-  return out
-}
-
-// ── Flat link primitive ────────────────────────────────────────────
-
 function SidebarLink({
   href,
   icon: Icon,
@@ -400,7 +290,7 @@ function SidebarLink({
   indent = false,
 }: {
   href: string
-  icon: typeof LayoutGrid
+  icon: typeof Plug
   label: string
   current: string
   indent?: boolean
