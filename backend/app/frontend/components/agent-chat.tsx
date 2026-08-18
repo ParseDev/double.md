@@ -239,7 +239,7 @@ interface AgentChatProps {
   agentStatus?: string
   // Logged-in user — used to label the user's own composed messages with
   // their real name + email, instead of the generic "me".
-  currentUser?: { id: number; name: string; email: string } | null
+  currentUser?: { id: string | number; name: string; email: string } | null
   initialMessages?: { id?: number; role: string; content: string; created_at: string; metadata?: Record<string, unknown>; sender?: SenderInfo | null }[]
   approvalsByMessage?: Record<string, { id: number; tool_name: string; tool_input: Record<string, unknown>; status: string }[]>
   pendingActionApprovals?: PendingActionApprovalSeed[]

@@ -3,6 +3,7 @@ import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
+import { AgentBlob } from "@/components/agent-blob";
 import { MarkdownText, CitationsProvider, type Citation } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
@@ -216,18 +217,14 @@ const ThreadMessage: FC = () => {
   return <AssistantMessage />;
 };
 
-// Sender chip: initials avatar + "<Name> · <email>". Reads custom.sender from
+// Sender chip: blobatar + "<Name> · <email>". Reads custom.sender from
 // the message metadata (agent-chat hydrates this for live, persisted, and
 // optimistic messages). When sender is missing entirely (legacy rows), we
 // render nothing — the bubble alone is enough.
 type SenderInfo = { name?: string | null; email?: string | null; kind?: "agent" | "user" | "external" };
 
-const senderInitials = (name?: string | null, email?: string | null) => {
-  const base = (name || email || "").trim();
-  if (!base) return "?";
-  const parts = base.split(/[\s@\.]+/).filter(Boolean);
-  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || base[0].toUpperCase();
-};
+const senderSeed = (name?: string | null, email?: string | null) =>
+  (name || email || "").trim() || "?";
 
 const SenderHeader: FC<{ align?: "left" | "right" }> = ({ align = "left" }) => {
   const sender = useAuiState((s) => {
@@ -237,25 +234,24 @@ const SenderHeader: FC<{ align?: "left" | "right" }> = ({ align = "left" }) => {
 
   if (!sender || (!sender.name && !sender.email)) return null;
 
+  // The blobatar carries who; the name's tint carries what kind of who, which
+  // the face alone cannot say — an external sender is worth spotting at a
+  // glance. It rides on the name rather than on the blobatar because a ring
+  // around a backdrop-less silhouette frames mostly empty space.
   const tint =
     sender.kind === "agent"
-      ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-300"
+      ? "text-indigo-600 dark:text-indigo-300"
       : sender.kind === "external"
-      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
-      : "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+      ? "text-amber-700 dark:text-amber-300"
+      : "text-emerald-700 dark:text-emerald-300";
 
   return (
     <div
       className={`flex items-center gap-2 text-xs text-muted-foreground mb-1 ${align === "right" ? "justify-end" : ""}`}
       data-sender-kind={sender.kind ?? "unknown"}
     >
-      <span
-        className={`inline-flex size-5 items-center justify-center rounded-full text-[10px] font-medium ${tint}`}
-        aria-hidden="true"
-      >
-        {senderInitials(sender.name, sender.email)}
-      </span>
-      {sender.name && <span className="font-medium text-foreground/80">{sender.name}</span>}
+      <AgentBlob name={senderSeed(sender.name, sender.email)} size={20} animate={false} />
+      {sender.name && <span className={`font-medium ${tint}`}>{sender.name}</span>}
       {sender.email && <span className="truncate">{sender.email}</span>}
     </div>
   );

@@ -19,13 +19,13 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { AgentBlob } from "@/components/agent-blob"
 import AppLogo from "@/components/app-logo"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Overline } from "@/components/brand"
 import { LandingFooter } from "@/components/landing/landing-footer"
 import { LandingNav } from "@/components/landing/landing-nav"
-import { RobotCharacter } from "@/components/robot-character"
 import { deployHref } from "@/components/template-deploy-card"
 import { MODELS_BY_PROVIDER } from "@/lib/model-catalog"
 
@@ -167,7 +167,7 @@ export default function TemplatePublicShow({ template: t }: { template: Template
                 className="pointer-events-none absolute -inset-6 rounded-full opacity-70 blur-2xl"
                 style={{ background: "radial-gradient(closest-side, var(--indigo-glow) 0%, transparent 75%)" }}
               />
-              <RobotCharacter seed={t.slug} size={248} className="relative drop-shadow-xl" />
+              <AgentBlob name={t.slug} size={248} animate="always" className="relative drop-shadow-xl" />
             </div>
 
             <div className="flex-1 text-center md:text-left">
@@ -323,7 +323,7 @@ export default function TemplatePublicShow({ template: t }: { template: Template
                 }}
               />
               <div className="relative flex flex-col items-center gap-4">
-                <RobotCharacter seed={t.slug} size={84} />
+                <AgentBlob name={t.slug} size={84} />
                 <div>
                   <p className="font-display text-2xl font-semibold tracking-[-0.02em]">
                     Put <span className="serif-italic text-[var(--color-indigo)]">{t.name}</span> to work.

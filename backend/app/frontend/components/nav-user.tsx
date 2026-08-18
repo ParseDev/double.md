@@ -1,6 +1,23 @@
 import { Link, router, usePage } from "@inertiajs/react"
 import { useState } from "react"
-import { Building2, Check, ChevronsUpDown, LogOut, Plus, Settings } from "lucide-react"
+import {
+  Activity,
+  BookMarked,
+  Building2,
+  Check,
+  CheckSquare,
+  ChevronsUpDown,
+  KeyRound,
+  LogOut,
+  Plus,
+  ScrollText,
+  Settings,
+  Shield,
+  ShieldCheck,
+  TrendingUp,
+  Users,
+  Wrench,
+} from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -29,11 +46,19 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { destroyUserSessionPath, organizationsPath, settingsPath, switchOrganizationPath } from "@/routes"
+import {
+  auditLogsPath,
+  destroyUserSessionPath,
+  organizationsPath,
+  pendingApprovalsPath,
+  settingsPath,
+  switchOrganizationPath,
+  tasksPath,
+} from "@/routes"
 import type { SharedProps } from "@/types"
 
 export function NavUser() {
-  const { auth } = usePage<SharedProps>().props
+  const { auth, is_platform_admin: isPlatformAdmin } = usePage<SharedProps>().props
   const { isMobile } = useSidebar()
   const [createOpen, setCreateOpen] = useState(false)
   const [orgName, setOrgName] = useState("")
@@ -145,12 +170,30 @@ export function NavUser() {
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <Link href={settingsPath()} className="cursor-pointer">
-                <Settings className="mr-2 size-4" />
-                Settings
-              </Link>
-            </DropdownMenuItem>
+            {/* The sidebar is the agent roster and nothing else, so everything
+                that is not an agent lands here. Grouped by how often it gets
+                reached for: work first, then the library, then admin. */}
+            <DropdownMenuGroup>
+              <MenuLink href={tasksPath()} icon={CheckSquare} label="Tasks" />
+              <MenuLink href={pendingApprovalsPath()} icon={ShieldCheck} label="Approvals" />
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <MenuLink href="/agent_templates" icon={BookMarked} label="Templates" />
+              <MenuLink href="/skills" icon={Wrench} label="Skills" />
+              <MenuLink href="/reports" icon={TrendingUp} label="Reports" />
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <MenuLink href="/ops/runs" icon={Activity} label="Ops" />
+              <MenuLink href={auditLogsPath()} icon={ScrollText} label="Audit log" />
+              <MenuLink href="/invitations" icon={Users} label="Team" />
+              <MenuLink href="/settings/credentials" icon={KeyRound} label="Credentials" />
+              <MenuLink href={settingsPath()} icon={Settings} label="Workspace" />
+              {isPlatformAdmin === true && (
+                <MenuLink href="/admin/dashboard" icon={Shield} label="Admin" />
+              )}
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() =>
@@ -206,5 +249,24 @@ export function NavUser() {
         </DialogContent>
       </Dialog>
     </SidebarMenu>
+  )
+}
+
+function MenuLink({
+  href,
+  icon: Icon,
+  label,
+}: {
+  href: string
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+}) {
+  return (
+    <DropdownMenuItem asChild>
+      <Link href={href} className="cursor-pointer">
+        <Icon className="mr-2 size-4 text-muted-foreground" />
+        {label}
+      </Link>
+    </DropdownMenuItem>
   )
 }
