@@ -9,7 +9,11 @@ class HomeController < ApplicationController
   # `template_slug` when a real deployable template matches (browse → deploy);
   # roles without a match fall back to the generic new-agent flow.
   def use_cases
-    slugs = ActsAsTenant.without_tenant { AgentTemplate.published.pluck(:slug) }.to_set
+    # `visible_to(nil)` is the public set (published + no owning org) — exactly
+    # what /agents/new?template=… can resolve for a logged-out visitor, so we
+    # only ever emit a template_slug whose deploy link actually lands. It also
+    # keeps org-private template slugs off this unauthenticated page.
+    slugs = ActsAsTenant.without_tenant { AgentTemplate.visible_to(nil).pluck(:slug) }.to_set
     categories = USE_CASES.map do |cat|
       roles = cat[:roles].map do |r|
         match = [ r[:role], r[:name] ].compact.map { |s| s.to_s.parameterize }.find { |s| slugs.include?(s) }

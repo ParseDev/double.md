@@ -10,10 +10,11 @@ module Email
     def self.parse_ses_notification(ses_notification)
       mail_info = ses_notification["mail"] || {}
       headers = mail_info["headers"] || []
+      mail = parse_mail(ses_notification)
 
       Result.new(
-        body_text: extract_body(ses_notification),
-        attachments: extract_attachments(ses_notification),
+        body_text: extract_body(mail, ses_notification),
+        attachments: extract_attachments(mail),
         message_id: header(headers, "Message-ID") || mail_info["messageId"],
         in_reply_to: header(headers, "In-Reply-To"),
         references: header(headers, "References"),
@@ -43,22 +44,35 @@ module Email
       headers.find { |h| h["name"]&.casecmp(name) == 0 }&.dig("value")
     end
 
-    def self.extract_body(ses_notification)
-      content = ses_notification["content"]
-      return ses_notification.dig("mail", "commonHeaders", "subject").to_s if content.blank?
+    # Build the Mail object once per notification. S3-backed messages would
+    # otherwise be downloaded twice — once for the body, once for attachments.
+    # Returns nil when there's no MIME to parse; RawFetcher::FetchError is
+    # deliberately left to propagate so a failed download retries rather than
+    # landing as a subject-only message.
+    def self.parse_mail(ses_notification)
+      raw = RawFetcher.call(ses_notification)
+      return nil if raw.blank?
 
-      mail = Mail.new(content)
+      Mail.new(raw)
+    rescue RawFetcher::FetchError
+      raise
+    rescue => e
+      Rails.logger.error "MimeParser: could not parse MIME: #{e.message}"
+      nil
+    end
+
+    def self.extract_body(mail, ses_notification)
+      return ses_notification.dig("mail", "commonHeaders", "subject").to_s if mail.nil?
+
       mail.text_part&.decoded || mail.html_part&.decoded || mail.body&.decoded || ""
     rescue => e
       Rails.logger.error "MimeParser body error: #{e.message}"
       ""
     end
 
-    def self.extract_attachments(ses_notification)
-      content = ses_notification["content"]
-      return [] if content.blank?
+    def self.extract_attachments(mail)
+      return [] if mail.nil?
 
-      mail = Mail.new(content)
       mail.attachments.reject(&:inline?).map do |att|
         {
           filename: att.filename,
