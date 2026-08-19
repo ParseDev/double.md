@@ -418,7 +418,7 @@ Internal team only for now. If you're early-team material and want to build some
 
 ## License
 
-Source-available under a custom license — see [`LICENSE`](LICENSE) (TBD). Production use by ScribeMD; external commercial use case-by-case until we settle on terms.
+MIT — see [`LICENSE`](LICENSE). Use it, fork it, ship it.
 
 ---
 
