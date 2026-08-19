@@ -63,3 +63,7 @@ node_modules
 
 .DS_Store
 backend/db/development.sqlite3
+
+# macOS app build output
+mac/build/
+mac/dist/

@@ -1,22 +1,11 @@
-import { Head, Link, usePage } from "@inertiajs/react"
+import { Head, Link } from "@inertiajs/react"
 import { ArrowRight, GitBranch } from "lucide-react"
 import { useEffect, useRef } from "react"
 
-import { StatusDot } from "@/components/brand"
+import { AppleLogo, GithubLogo, StatusDot } from "@/components/brand"
 import { LandingFooter } from "@/components/landing/landing-footer"
 import { LandingNav } from "@/components/landing/landing-nav"
 import { Button } from "@/components/ui/button"
-import { dashboardPath, newUserRegistrationPath } from "@/routes"
-import type { SharedProps } from "@/types"
-
-function useCta() {
-  const { auth } = usePage<SharedProps>().props
-  const signedIn = !!auth?.user
-  return {
-    href: signedIn ? dashboardPath() : newUserRegistrationPath(),
-    label: signedIn ? "Open dashboard" : "Get started",
-  }
-}
 
 export default function LandingPage() {
   return (
@@ -51,8 +40,12 @@ export default function LandingPage() {
 const LOOP_FROM = 0.45
 const WRAP_FADE_MS = 220
 
+/** Stable URL — `mac/package.sh --upload` overwrites this key on every release,
+ *  so it is deliberately served with a short max-age. */
+const MAC_DOWNLOAD_URL = "https://static.scribemd.ai/sentrel/Sentrel.dmg"
+const GITHUB_URL = "https://github.com/SentrelAI/sentrel"
+
 function Hero() {
-  const cta = useCta()
   const video = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -118,9 +111,10 @@ function Hero() {
         </div>
 
         <h1 className="text-hero mt-10 text-foreground">
-          Meet your{" "}
-          <span className="serif-italic text-muted-foreground">new</span>{" "}
-          <span className="serif-italic text-[var(--color-indigo)]">AI team</span>.
+          Free and{" "}
+          <span className="serif-italic text-[var(--color-indigo)]">Open</span>{" "}
+          alternative to{" "}
+          <span className="serif-italic text-muted-foreground">Grok Bot</span>
         </h1>
 
         <p className="mt-7 max-w-lg text-[17px] leading-relaxed text-muted-foreground">
@@ -133,15 +127,25 @@ function Hero() {
           <Button
             asChild
             size="lg"
-            className="group h-12 gap-1.5 px-6 text-sm shadow-[0_0_0_1px_var(--color-indigo),0_12px_32px_-8px_var(--indigo-glow)]"
+            className="h-12 gap-2 px-6 text-sm shadow-[0_0_0_1px_var(--color-indigo),0_12px_32px_-8px_var(--indigo-glow)]"
           >
-            <Link href={cta.href}>
-              {cta.label}
+            {/* Plain anchor, not Inertia's Link: this leaves the SPA for S3. */}
+            <a href={MAC_DOWNLOAD_URL}>
+              <AppleLogo className="size-4" />
+              Download for Mac
+            </a>
+          </Button>
+          <Button asChild size="lg" variant="outline" className="h-12 gap-2 px-6 text-sm">
+            <a href={GITHUB_URL} target="_blank" rel="noreferrer">
+              <GithubLogo className="size-4" />
+              View on GitHub
+            </a>
+          </Button>
+          <Button asChild size="lg" variant="ghost" className="group h-12 gap-1.5 px-5 text-sm">
+            <Link href="/use-cases">
+              Browse 100+ roles
               <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
             </Link>
-          </Button>
-          <Button asChild size="lg" variant="outline" className="h-12 px-6 text-sm">
-            <Link href="/use-cases">Browse 100+ roles</Link>
           </Button>
         </div>
 
@@ -155,18 +159,16 @@ function Hero() {
           <span className="opacity-40">·</span>
           <span>Slack · Gmail · 250+ apps</span>
           <span className="opacity-40">·</span>
-          {/* "Source available", not "open source": the repo is public but
-              carries no LICENSE, and the README states a custom
-              source-available license is still TBD. Flip the wording once an
-              OSI license actually lands. */}
+          {/* The LICENSE the old comment here was waiting on has landed, so the
+              wording is now "MIT licensed" rather than "source available". */}
           <a
-            href="https://github.com/SentrelAI/sentrel"
+            href={GITHUB_URL}
             target="_blank"
             rel="noreferrer"
             className="flex items-center gap-1.5 transition-colors hover:text-foreground"
           >
             <GitBranch className="size-3" />
-            source available
+            MIT licensed
           </a>
         </div>
       </div>
